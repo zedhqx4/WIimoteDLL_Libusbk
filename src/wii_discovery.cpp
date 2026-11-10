@@ -243,6 +243,8 @@ bool SendAcl(libusb_device_handle* handle, uint8_t endpoint, uint16_t handle_id,
     return rc == LIBUSB_SUCCESS && transferred == static_cast<int>(packet.size());
 }
 
+uint16_t ReadLe16(const std::vector<uint8_t>& data, size_t offset);
+
 bool ReadAcl(libusb_device_handle* handle, uint8_t endpoint, uint16_t expected_handle,
              std::vector<uint8_t>& l2cap, unsigned timeout_ms, bool trace = false)
 {
@@ -253,7 +255,7 @@ bool ReadAcl(libusb_device_handle* handle, uint8_t endpoint, uint16_t expected_h
     if (rc != LIBUSB_SUCCESS || transferred < 8)
     {
         if (trace && rc != LIBUSB_ERROR_TIMEOUT)
-            std::printf("ACL read failed: %s (%d bytes).\\n",
+            std::printf("ACL read failed: %s (%d bytes).\n",
                         libusb_error_name(rc), transferred);
         return false;
     }
@@ -270,7 +272,7 @@ bool ReadAcl(libusb_device_handle* handle, uint8_t endpoint, uint16_t expected_h
     {
         if (trace)
             std::printf("ACL packet rejected: handle=0x%04X expected=0x%04X "
-                        "acl_length=%u l2cap_length=%u transferred=%d.\\n",
+                        "acl_length=%u l2cap_length=%u transferred=%d.\n",
                         hf & 0x0FFF, expected_handle, acl_length, l2cap_length, transferred);
         return false;
     }
@@ -282,7 +284,7 @@ bool ReadAcl(libusb_device_handle* handle, uint8_t endpoint, uint16_t expected_h
                     hf & 0x0FFF, (hf >> 12) & 0x03, cid, l2cap_length);
         for (size_t i = 4; i < l2cap.size() && i < 20; ++i)
             std::printf("%02X%s", l2cap[i], i + 1 < l2cap.size() && i + 1 < 20 ? " " : "");
-        std::printf("%s\\n", l2cap.size() > 20 ? " ..." : "");
+        std::printf("%s\n", l2cap.size() > 20 ? " ..." : "");
     }
     return true;
 }
@@ -315,7 +317,7 @@ bool ConnectL2capPsm(libusb_device_handle* handle, const HciInterface& hci,
             !(packet[4] == 0x03 && packet[5] == ident))
         {
             std::printf("Deferring L2CAP signaling packet during PSM 0x%04X connect: "
-                        "code=0x%02X id=%u length=%u.\\n",
+                        "code=0x%02X id=%u length=%u.\n",
                         psm, packet[4], packet[5], ReadLe16(packet, 6));
             pending_signaling.push_back(std::move(packet));
             continue;
@@ -512,7 +514,7 @@ bool ConfigureL2capChannels(libusb_device_handle* handle, const HciInterface& hc
         {
             packet = std::move(pending_signaling.front());
             pending_signaling.pop_front();
-            std::printf("Processing deferred L2CAP signaling packet (%zu bytes).\\n",
+            std::printf("Processing deferred L2CAP signaling packet (%zu bytes).\n",
                         packet.size());
         }
         else if (!ReadAcl(handle, hci.acl_in_endpoint, handle_id, packet, 1000, true))
