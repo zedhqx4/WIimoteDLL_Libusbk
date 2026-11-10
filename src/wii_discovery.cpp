@@ -383,7 +383,7 @@ bool RunConnection(libusb_device* device, const std::array<uint8_t, 6>& remote,
                 // Legacy PIN is six raw address bytes, not six ASCII digits.
                 // SYNC bonds to the host address; 1+2 uses the remote address.
                 const auto& pin_address = sync_pairing ? local : remote;
-                std::array<uint8_t, 13> pin_reply{};
+                std::array<uint8_t, 23> pin_reply{};
                 std::copy(response.begin() + 2, response.begin() + 8, pin_reply.begin());
                 pin_reply[6] = 6;
                 std::copy(pin_address.begin(), pin_address.end(), pin_reply.begin() + 7);
@@ -576,7 +576,7 @@ int main(int argc, char** argv)
     bool sync_pairing = true;
     std::array<uint8_t, 6> target{};
 
-    if (argc == 5 && std::strcmp(argv[1], "--connect") == 0)
+    if ((argc == 4 || argc == 6) && std::strcmp(argv[1], "--connect") == 0)
     {
         connect_mode = true;
         if (!ParseAddress(argv[2], target))
@@ -593,8 +593,11 @@ int main(int argc, char** argv)
             std::puts("Pairing mode must be 'sync' or '1+2'.");
             return 2;
         }
-        vid = static_cast<uint16_t>(std::strtoul(argv[4], nullptr, 0));
-        pid = kDefaultPid;
+        if (argc == 6)
+        {
+            vid = static_cast<uint16_t>(std::strtoul(argv[4], nullptr, 0));
+            pid = static_cast<uint16_t>(std::strtoul(argv[5], nullptr, 0));
+        }
     }
     else if (argc == 3)
     {
