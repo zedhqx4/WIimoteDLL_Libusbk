@@ -289,19 +289,35 @@ bool ConnectL2capPsm(libusb_device_handle* handle, const HciInterface& hci,
         if (packet.size() < 16 || packet[2] != 0x01 ||
             packet[4] != 0x03 || packet[5] != ident)
             continue;
-        remote_cid = static_cast<uint16_t>(packet[8]) |
-                     (static_cast<uint16_t>(packet[9]) << 8);
+        const uint16_t destination_cid = static_cast<uint16_t>(packet[8]) |
+                                         (static_cast<uint16_t>(packet[9]) << 8);
         const uint16_t echoed_cid = static_cast<uint16_t>(packet[10]) |
                                     (static_cast<uint16_t>(packet[11]) << 8);
         const uint16_t result = static_cast<uint16_t>(packet[12]) |
                                 (static_cast<uint16_t>(packet[13]) << 8);
+        const uint16_t status = static_cast<uint16_t>(packet[14]) |
+                                (static_cast<uint16_t>(packet[15]) << 8);
         if (echoed_cid != local_cid)
             continue;
+
+        // L2CAP result 0x0001 means Pending, not rejection. The peer may
+        // send another Connection Response with the same identifier later.
+        if (result == 0x0001)
+        {
+            std::printf("L2CAP PSM 0x%04X connection pending (status 0x%04X).\n",
+                        psm, status);
+            continue;
+        }
         if (result != 0)
         {
-            std::printf("L2CAP PSM 0x%04X rejected, result 0x%04X\n", psm, result);
+            const char* reason = result == 0x0002 ? "PSM not supported" :
+                                 result == 0x0003 ? "security block" :
+                                 result == 0x0004 ? "no resources" : "unknown result";
+            std::printf("L2CAP PSM 0x%04X connection failed: %s (result 0x%04X, status 0x%04X).\n",
+                        psm, reason, result, status);
             return false;
         }
+        remote_cid = destination_cid;
         std::printf("L2CAP PSM 0x%04X connected (local 0x%04X, remote 0x%04X).\n",
                     psm, local_cid, remote_cid);
         return true;
