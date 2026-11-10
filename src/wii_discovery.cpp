@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -28,6 +29,8 @@ struct HciInterface
     int number = -1;
     int alternate = 0;
     uint8_t event_endpoint = 0;
+    uint8_t acl_in_endpoint = 0;
+    uint8_t acl_out_endpoint = 0;
 };
 
 bool FindHciInterface(libusb_device* device, HciInterface& result)
@@ -49,20 +52,26 @@ bool FindHciInterface(libusb_device* device, HciInterface& result)
                 alt.bInterfaceProtocol != kUsbBluetoothProtocol)
                 continue;
 
+            uint8_t event_endpoint = 0;
+            uint8_t acl_in_endpoint = 0;
+            uint8_t acl_out_endpoint = 0;
             for (uint8_t e = 0; e < alt.bNumEndpoints; ++e)
             {
                 const auto& ep = alt.endpoint[e];
-                const bool is_interrupt = (ep.bmAttributes & LIBUSB_TRANSFER_TYPE_MASK) ==
-                                          LIBUSB_TRANSFER_TYPE_INTERRUPT;
-                const bool is_input = (ep.bEndpointAddress & LIBUSB_ENDPOINT_DIR_MASK) ==
-                                      LIBUSB_ENDPOINT_IN;
-                if (is_interrupt && is_input)
-                {
-                    result = {alt.bInterfaceNumber, alt.bAlternateSetting,
-                              ep.bEndpointAddress};
-                    found = true;
-                    break;
-                }
+                const auto type = ep.bmAttributes & LIBUSB_TRANSFER_TYPE_MASK;
+                const bool input = (ep.bEndpointAddress & LIBUSB_ENDPOINT_DIR_MASK) == LIBUSB_ENDPOINT_IN;
+                if (type == LIBUSB_TRANSFER_TYPE_INTERRUPT && input)
+                    event_endpoint = ep.bEndpointAddress;
+                else if (type == LIBUSB_TRANSFER_TYPE_BULK && input)
+                    acl_in_endpoint = ep.bEndpointAddress;
+                else if (type == LIBUSB_TRANSFER_TYPE_BULK && !input)
+                    acl_out_endpoint = ep.bEndpointAddress;
+            }
+            if (event_endpoint && acl_in_endpoint && acl_out_endpoint)
+            {
+                result = {alt.bInterfaceNumber, alt.bAlternateSetting,
+                          event_endpoint, acl_in_endpoint, acl_out_endpoint};
+                found = true;
             }
         }
     }
