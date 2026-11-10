@@ -663,26 +663,26 @@ bool RunHidpInputTest(libusb_device_handle* handle, const HciInterface& hci,
                     (static_cast<uint16_t>(event[4] & 0x0F) << 8);
                 if (event_handle == connection_handle)
                 {
-                    std::printf("HCI Disconnection Complete: status=0x%02X reason=0x%02X.\\n",
+                    std::printf("HCI Disconnection Complete: status=0x%02X reason=0x%02X.\n",
                                 event[2], event[5]);
                     break;
                 }
             }
             else if (event_code == 0x13 && event_size >= 3)
             {
-                std::printf("HCI Number Of Completed Packets event received (%u handle entries).\\n",
+                std::printf("HCI Number Of Completed Packets event received (%u handle entries).\n",
                             event[2]);
             }
             else
             {
-                std::printf("HCI event 0x%02X received during HIDP input (%d parameter bytes).\\n",
+                std::printf("HCI event 0x%02X received during HIDP input (%d parameter bytes).\n",
                             event_code, event[1]);
             }
         }
         else if (event_rc != LIBUSB_SUCCESS &&
                  event_rc != LIBUSB_ERROR_TIMEOUT)
         {
-            std::printf("HCI event endpoint read failed: %s.\\n",
+            std::printf("HCI event endpoint read failed: %s.\n",
                         libusb_error_name(event_rc));
         }
 
