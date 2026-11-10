@@ -224,8 +224,19 @@ bool HasUsbHciAdapter(int selectedVid, int selectedPid) {
 
 class LibusbBackend final : public Backend {
 public:
-    LibusbBackend(int selectedVid, int selectedPid)
-        : selectedVid_(selectedVid), selectedPid_(selectedPid), worker_([this] { Run(); }) {}
+    static std::filesystem::path DefaultStorageDirectory() {
+        const char* localAppData = std::getenv("LOCALAPPDATA");
+        if (!localAppData || !*localAppData)
+            return {};
+        return std::filesystem::path(localAppData) / "WiiBluetoothHost";
+    }
+
+    LibusbBackend(int selectedVid, int selectedPid,
+                  std::filesystem::path storageDirectory = {})
+        : selectedVid_(selectedVid), selectedPid_(selectedPid),
+          storageDirectory_(storageDirectory.empty() ? DefaultStorageDirectory()
+                                                     : std::move(storageDirectory)),
+          worker_([this] { Run(); }) {}
 
     ~LibusbBackend() override {
         stop_.store(true);
@@ -292,6 +303,7 @@ private:
     std::condition_variable cv_;
     int selectedVid_ = -1;
     int selectedPid_ = -1;
+    std::filesystem::path storageDirectory_;
     std::thread worker_;
 
     std::mutex stateMutex_;
@@ -584,11 +596,10 @@ private:
         return true;
     }
 
-    static std::filesystem::path LinkKeyPath() {
-        const char* localAppData = std::getenv("LOCALAPPDATA");
-        if (!localAppData || !*localAppData)
+    std::filesystem::path LinkKeyPath() const {
+        if (storageDirectory_.empty())
             return {};
-        return std::filesystem::path(localAppData) / "HOTD2RE" / "wii_link_keys.txt";
+        return storageDirectory_ / "wii_link_keys.txt";
     }
 
     void LoadLinkKeys() {
@@ -1659,6 +1670,19 @@ extern "C" WII_BT_API void* WII_BT_CALL WiiBt_Create(int32_t vid, int32_t pid) {
           (vid > 0 && vid <= 0xffff && pid > 0 && pid <= 0xffff)))
         return nullptr;
     try { return new LibusbBackend(vid, pid); } catch (...) { return nullptr; }
+}
+extern "C" WII_BT_API void* WII_BT_CALL WiiBt_CreateWithStorage(
+    int32_t vid, int32_t pid, const wchar_t* storage_directory) {
+    if (!((vid == -1 && pid == -1) ||
+          (vid > 0 && vid <= 0xffff && pid > 0 && pid <= 0xffff)))
+        return nullptr;
+    try {
+        const std::filesystem::path directory =
+            storage_directory && *storage_directory
+                ? std::filesystem::path(storage_directory)
+                : std::filesystem::path{};
+        return new LibusbBackend(vid, pid, directory);
+    } catch (...) { return nullptr; }
 }
 extern "C" WII_BT_API void WII_BT_CALL WiiBt_Destroy(void* instance) {
     delete static_cast<LibusbBackend*>(instance);
