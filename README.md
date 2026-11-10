@@ -14,13 +14,20 @@ Independent USB Bluetooth host for Nintendo Wii Remotes, intended to be consumed
 
 The CSR8510 A10 adapter (USB VID:PID `0A12:0001`) has been tested with libusbK on Windows. USB interface claim/release and HCI command/event exchange have been verified using separate probes in HOTD2RE.
 
-Verified HCI operations so far:
+Verified hardware operations from the HOTD2RE probes:
 
+- USB HCI interface claim/release
 - HCI Reset (`0x0C03`)
 - Read Local Version Information (`0x1001`)
 - Read BD_ADDR (`0x1009`)
 
-These checks do not yet implement discovery, pairing, L2CAP, or HID.
+## Current implementation
+
+The `feature/hci-discovery-pairing` branch contains an initial `wii_discovery` executable. It claims the USB HCI interface, resets the controller, starts a General Inquiry (GIAC), and prints discovered Bluetooth addresses and Class of Device values.
+
+This is the first active discovery step, **not pairing yet**. The next increment will identify Wii Remotes, create the baseband connection, and implement the two Wii Remote PIN procedures (1+2 and SYNC).
+
+The new discovery executable has been committed but has not yet been compiled or tested on the user's CSR8510. Do not treat it as hardware-verified.
 
 ## Development order
 
@@ -33,7 +40,3 @@ These checks do not yet implement discovery, pairing, L2CAP, or HID.
 ## Licensing
 
 The repository is intended to host a separately distributed component. Any Dolphin-derived source must retain its applicable GPL-2.0-or-later notices and corresponding source-distribution obligations. Game projects communicate with the host through a documented interface; licensing implications of the concrete integration model must be reviewed before distribution.
-
-## Status
-
-The repository was initially empty. Implementation has not started; the verified hardware baseline above comes from the separate HOTD2RE probe.
