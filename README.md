@@ -1,43 +1,58 @@
 # WiiMoteDLL_Libusbk
 
-Independent USB Bluetooth host for Nintendo Wii Remotes, intended to be consumed by multiple game projects.
+Reusable USB Bluetooth host for Nintendo Wii Remotes on Windows, with a versioned C ABI and a standalone hardware diagnostic.
 
-## Goals
+## Components
 
-- Own a dedicated USB Bluetooth HCI adapter through libusb/libusbK.
-- Discover and pair Wii Remotes using both 1+2 and SYNC-button procedures.
-- Implement Bluetooth Classic HCI, L2CAP, HIDP, and Wii Remote report handling.
-- Keep the Windows Bluetooth stack and unrelated radios untouched.
-- Expose a stable API to game integrations and provide a standalone diagnostic/pairing utility.
+- **`wii_bt_passthrough.dll`**: optional two-player backend for applications. It performs USB HCI adapter selection, Wii Remote discovery, baseband connection, legacy PIN authentication, link-key restore/save, encryption, L2CAP HID channels, HIDP input and IR initialization. The public API is in [`include/wii_bt_api.h`](include/wii_bt_api.h).
+- **`wii_discovery.exe`**: the independent low-level diagnostic used to validate real adapter/remote HCI, pairing, encryption, L2CAP and HIDP behavior. The SYNC flow was verified with a physical Wii Remote and CSR8510 A10 (`0A12:0001`) through libusbK on Windows. The program is retained as a hardware diagnostic, not used as the DLL's implementation.
+- **libusb**: USB transport dependency; it remains LGPL-2.1-or-later and is not relicensed by this repository.
 
-## Current hardware baseline
+The reusable runtime was extracted from HOTD2RE's Windows USB backend so the game and other clients can consume the same independently built DLL instead of compiling a private Bluetooth stack into each game. Its source retains the upstream HOTD2RE MIT license; see [Third-party notices](THIRD_PARTY_NOTICES.md) and [LICENSE-HOTD2RE](LICENSE-HOTD2RE). The independent diagnostic and other original project code are under 0BSD.
 
-The CSR8510 A10 adapter (USB VID:PID `0A12:0001`) has been tested with libusbK on Windows. USB interface claim/release and HCI command/event exchange have been verified using separate probes in HOTD2RE.
+## Adapter selection
 
-Verified HCI operations so far:
+The library does not assume CSR8510 or any particular vendor ID.
 
-- HCI Reset (`0x0C03`)
-- Read Local Version Information (`0x1001`)
-- Read BD_ADDR (`0x1009`)
+- Automatic: pass `-1, -1`; the runtime enumerates standard USB Bluetooth HCI devices and tries to claim a compatible interface.
+- Explicit: pass a VID/PID pair to constrain selection. It does not silently fall back to another adapter.
+- The game/application should keep native Windows Bluetooth HID as its default path and load this DLL only when the user explicitly enables USB passthrough.
 
-These checks do not yet implement discovery, pairing, L2CAP, or HID.
+The HCI interface must be accessible through libusb. On Windows, use a compatible WinUSB/libusbK driver for the chosen adapter. An adapter owned exclusively by the Windows Bluetooth stack may not be claimable through libusb.
 
-## Development order
+## Build
 
-1. **Discovery and pairing:** HCI inquiry, Wii Remote identification, connection, authentication, and link-key handling for both 1+2 and SYNC.
-2. **L2CAP:** establish the HID control and interrupt channels.
-3. **HIDP:** configure the remote and receive input reports.
-4. **Reusable host/API:** separate the Bluetooth host from game-specific input adapters.
-5. **Pairing/diagnostic utility:** provide a standalone tool to inspect the adapter and manage remote connections.
+Install the libusb development package so CMake can locate `libusb.h` and `libusb-1.0`.
+
+```powershell
+cmake -S . -B build -A Win32
+cmake --build build --config Release
+```
+
+The build produces `wii_bt_passthrough.dll` and, by default, `wii_discovery.exe`. Disable the diagnostic target with `-DWII_BT_BUILD_DIAGNOSTIC=OFF` when embedding the project as a dependency. The process must also be able to load `libusb-1.0.dll`.
+
+The library supports the architecture selected by the toolchain (Win32 or x64); the consumer and DLL must have matching architectures.
+
+## API
+
+API version: **3**.
+
+`WiiBt_Create(vid, pid)` uses generic per-user storage under `%LOCALAPPDATA%\\WiiBluetoothHost`. `WiiBt_CreateWithStorage(vid, pid, directory)` allows the application to supply its own UTF-16 storage directory; the library stores `wii_link_keys.txt` there. This keeps the library independent from any game's configuration or profile paths.
+
+The API supports create/destroy, enable/disable, scan, disconnect, player swap, and polling a stable fixed-size snapshot. No C++ STL types cross the DLL boundary.
+
+## Diagnostic commands
+
+```text
+wii_discovery.exe
+wii_discovery.exe 0x0A12 0x0001
+wii_discovery.exe --connect 40:D2:8A:07:EB:36 sync
+wii_discovery.exe --connect 40:D2:8A:07:EB:36 sync 0x0A12 0x0001
+wii_discovery.exe --connect 40:D2:8A:07:EB:36 1+2 0x0A12 0x0001
+```
+
+The diagnostic's SYNC test completed HCI discovery, baseband connection, legacy PIN authentication, link encryption, L2CAP control/interrupt setup and HIDP input reception with a physical Wii Remote. This hardware result applies to the tested CSR8510/libusbK combination; it is not a blanket compatibility claim for every adapter.
 
 ## License
 
-Original code in this repository is released under **0BSD** (see [LICENSE](LICENSE)). This is a permissive, OSI-approved license that allows use, modification, redistribution, and incorporation into other projects, including closed-source and commercial applications, without an attribution condition.
-
-The implementation is inspired by Dolphin's Bluetooth passthrough feature, but this repository does not copy or relicense Dolphin source code. Any future Dolphin-derived code must retain its GPL-2.0-or-later license and notices and must be reviewed separately; it cannot be relicensed as 0BSD.
-
-Third-party dependencies retain their own licenses. In particular, libusb is LGPL-2.1-or-later; the 0BSD license applies only to this repository's original code.
-
-## Status
-
-The default branch is an initial project scaffold. Active protocol development is on [feature/hci-discovery-pairing](https://github.com/zedhqx4/WIimoteDLL_Libusbk/tree/feature/hci-discovery-pairing). That branch contains a standalone diagnostic executable whose SYNC pairing, secured L2CAP HID channels and real Wii Remote button reports have been verified on a CSR8510 A10 with libusbK on Windows. It is **not yet a reusable DLL/library**; extraction into an application-independent library and validation with additional adapters are still planned.
+Original diagnostic and project code: **0BSD** (see [LICENSE](LICENSE)). The extracted HOTD2RE runtime file is **MIT-licensed**, with its license retained separately. libusb and other dependencies retain their own licenses.
