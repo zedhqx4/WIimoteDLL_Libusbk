@@ -244,14 +244,19 @@ bool SendAcl(libusb_device_handle* handle, uint8_t endpoint, uint16_t handle_id,
 }
 
 bool ReadAcl(libusb_device_handle* handle, uint8_t endpoint, uint16_t expected_handle,
-             std::vector<uint8_t>& l2cap, unsigned timeout_ms)
+             std::vector<uint8_t>& l2cap, unsigned timeout_ms, bool trace = false)
 {
     std::array<uint8_t, 4096> packet{};
     int transferred = 0;
     const int rc = libusb_bulk_transfer(handle, endpoint, packet.data(),
         static_cast<int>(packet.size()), &transferred, timeout_ms);
     if (rc != LIBUSB_SUCCESS || transferred < 8)
+    {
+        if (trace && rc != LIBUSB_ERROR_TIMEOUT)
+            std::printf("ACL read failed: %s (%d bytes).\\n",
+                        libusb_error_name(rc), transferred);
         return false;
+    }
     const uint16_t hf = static_cast<uint16_t>(packet[0]) |
                         (static_cast<uint16_t>(packet[1]) << 8);
     const uint16_t acl_length = static_cast<uint16_t>(packet[2]) |
@@ -262,14 +267,30 @@ bool ReadAcl(libusb_device_handle* handle, uint8_t endpoint, uint16_t expected_h
         acl_length + 4u > static_cast<unsigned>(transferred) ||
         l2cap_length + 4u > acl_length ||
         l2cap_length + 8u > static_cast<unsigned>(transferred))
+    {
+        if (trace)
+            std::printf("ACL packet rejected: handle=0x%04X expected=0x%04X "
+                        "acl_length=%u l2cap_length=%u transferred=%d.\\n",
+                        hf & 0x0FFF, expected_handle, acl_length, l2cap_length, transferred);
         return false;
+    }
     l2cap.assign(packet.begin() + 4, packet.begin() + 8 + l2cap_length);
+    if (trace)
+    {
+        const uint16_t cid = ReadLe16(l2cap, 2);
+        std::printf("ACL RX: handle=0x%04X PB=%u CID=0x%04X L2CAP=%u payload=",
+                    hf & 0x0FFF, (hf >> 12) & 0x03, cid, l2cap_length);
+        for (size_t i = 4; i < l2cap.size() && i < 20; ++i)
+            std::printf("%02X%s", l2cap[i], i + 1 < l2cap.size() && i + 1 < 20 ? " " : "");
+        std::printf("%s\\n", l2cap.size() > 20 ? " ..." : "");
+    }
     return true;
 }
 
 bool ConnectL2capPsm(libusb_device_handle* handle, const HciInterface& hci,
                      uint16_t handle_id, uint16_t psm, uint16_t local_cid,
-                     uint16_t& remote_cid)
+                     uint16_t& remote_cid,
+                     std::deque<std::vector<uint8_t>>& pending_signaling)
 {
     const uint8_t ident = psm == 0x0011 ? 1 : 2;
     const std::array<uint8_t, 8> req{
@@ -286,6 +307,19 @@ bool ConnectL2capPsm(libusb_device_handle* handle, const HciInterface& hci,
         std::vector<uint8_t> packet;
         if (!ReadAcl(handle, hci.acl_in_endpoint, handle_id, packet, 3000))
             continue;
+
+        // The peer can begin configuring an already-open channel while we
+        // are still waiting for the next PSM connection response. Preserve
+        // every other L2CAP signaling command for the configuration phase.
+        if (packet.size() >= 8 && ReadLe16(packet, 2) == 0x0001 &&
+            !(packet[4] == 0x03 && packet[5] == ident))
+        {
+            std::printf("Deferring L2CAP signaling packet during PSM 0x%04X connect: "
+                        "code=0x%02X id=%u length=%u.\\n",
+                        psm, packet[4], packet[5], ReadLe16(packet, 6));
+            pending_signaling.push_back(std::move(packet));
+            continue;
+        }
         if (packet.size() < 16 || packet[2] != 0x01 ||
             packet[4] != 0x03 || packet[5] != ident)
             continue;
@@ -450,7 +484,8 @@ bool HandleConfigurationRequest(libusb_device_handle* handle, const HciInterface
 bool ConfigureL2capChannels(libusb_device_handle* handle, const HciInterface& hci,
                             uint16_t handle_id, uint16_t control_local,
                             uint16_t control_remote, uint16_t interrupt_local,
-                            uint16_t interrupt_remote)
+                            uint16_t interrupt_remote,
+                            std::deque<std::vector<uint8_t>>& pending_signaling)
 {
     L2capChannel control{0x0011, control_local, control_remote, 3};
     L2capChannel interrupt{0x0013, interrupt_local, interrupt_remote, 4};
@@ -473,7 +508,14 @@ bool ConfigureL2capChannels(libusb_device_handle* handle, const HciInterface& hc
         }
 
         std::vector<uint8_t> packet;
-        if (!ReadAcl(handle, hci.acl_in_endpoint, handle_id, packet, 1000))
+        if (!pending_signaling.empty())
+        {
+            packet = std::move(pending_signaling.front());
+            pending_signaling.pop_front();
+            std::printf("Processing deferred L2CAP signaling packet (%zu bytes).\\n",
+                        packet.size());
+        }
+        else if (!ReadAcl(handle, hci.acl_in_endpoint, handle_id, packet, 1000, true))
             continue;
         if (packet.size() < 8 || ReadLe16(packet, 2) != 0x0001)
             continue;
@@ -756,12 +798,16 @@ bool RunConnection(libusb_device* device, const std::array<uint8_t, 6>& remote,
         std::puts("Baseband authentication is complete. Opening HID L2CAP channels...");
         uint16_t control_cid = 0;
         uint16_t interrupt_cid = 0;
-        if (!ConnectL2capPsm(handle, hci, connection_handle, 0x0011, 0x0040, control_cid))
+        std::deque<std::vector<uint8_t>> pending_signaling;
+        if (!ConnectL2capPsm(handle, hci, connection_handle, 0x0011, 0x0040,
+                             control_cid, pending_signaling))
             goto connection_cleanup;
-        if (!ConnectL2capPsm(handle, hci, connection_handle, 0x0013, 0x0041, interrupt_cid))
+        if (!ConnectL2capPsm(handle, hci, connection_handle, 0x0013, 0x0041,
+                             interrupt_cid, pending_signaling))
             goto connection_cleanup;
         if (!ConfigureL2capChannels(handle, hci, connection_handle,
-                                    0x0040, control_cid, 0x0041, interrupt_cid))
+                                    0x0040, control_cid, 0x0041, interrupt_cid,
+                                    pending_signaling))
             goto connection_cleanup;
         std::puts("HID L2CAP Control and Interrupt channels are ready for HIDP.");
         success = true;
