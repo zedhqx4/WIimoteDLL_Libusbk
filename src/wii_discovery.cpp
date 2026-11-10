@@ -219,6 +219,237 @@ void PrintAddress(const uint8_t* address)
                 address[2], address[1], address[0]);
 }
 
+
+bool ParseAddress(const char* text, std::array<uint8_t, 6>& address)
+{
+    unsigned values[6]{};
+    char tail = '\0';
+    if (std::sscanf(text, "%2x:%2x:%2x:%2x:%2x:%2x%c",
+                    &values[0], &values[1], &values[2],
+                    &values[3], &values[4], &values[5], &tail) != 6)
+        return false;
+    for (size_t i = 0; i < address.size(); ++i)
+        address[i] = static_cast<uint8_t>(values[5 - i]);
+    return true;
+}
+
+bool RunConnection(libusb_device* device, const std::array<uint8_t, 6>& remote,
+                   bool sync_pairing)
+{
+    HciInterface hci;
+    if (!FindHciInterface(device, hci))
+    {
+        std::puts("No standard USB Bluetooth HCI interface found.");
+        return false;
+    }
+
+    libusb_device_handle* handle = nullptr;
+    int rc = libusb_open(device, &handle);
+    if (rc != LIBUSB_SUCCESS)
+    {
+        std::fprintf(stderr, "USB open failed: %s\n", libusb_error_name(rc));
+        return false;
+    }
+
+    bool claimed = false;
+    bool success = false;
+    rc = libusb_claim_interface(handle, hci.number);
+    if (rc != LIBUSB_SUCCESS)
+    {
+        std::fprintf(stderr, "Claim interface %d failed: %s\n",
+                     hci.number, libusb_error_name(rc));
+        libusb_close(handle);
+        return false;
+    }
+    claimed = true;
+
+    if (hci.alternate != 0 &&
+        libusb_set_interface_alt_setting(handle, hci.number, hci.alternate) != LIBUSB_SUCCESS)
+    {
+        std::puts("Could not select HCI alternate setting.");
+        goto connection_cleanup;
+    }
+
+    {
+        HciEventPump pump(handle, hci.event_endpoint);
+        std::vector<uint8_t> response;
+        if (!SendCommand(handle, pump, 0x0C03, nullptr, 0, response))
+        {
+            std::puts("HCI Reset failed.");
+            goto connection_cleanup;
+        }
+        std::puts("HCI Reset: OK");
+
+        // Read the adapter's own Bluetooth address. HCI returns address bytes
+        // in little-endian order, which is also the order required by PIN replies.
+        if (!SendCommand(handle, pump, 0x1009, nullptr, 0, response) ||
+            response.size() < 12 || response[5] != 0)
+        {
+            std::puts("HCI Read BD_ADDR failed.");
+            goto connection_cleanup;
+        }
+        std::array<uint8_t, 6> local{};
+        std::copy_n(response.begin() + 6, local.size(), local.begin());
+        std::printf("Host Bluetooth address: ");
+        PrintAddress(local.data());
+        std::printf("\nTarget Wii Remote: ");
+        PrintAddress(remote.data());
+        std::printf("\nPairing mode: %s\n", sync_pairing ? "SYNC (bonding)" : "1+2 (temporary)");
+
+        // Create Connection: packet type DM1/DH1/DM3/DH3/DM5/DH5,
+        // page scan repetition R1, clock offset unknown, role switch allowed.
+        std::array<uint8_t, 13> create{};
+        std::copy(remote.begin(), remote.end(), create.begin());
+        create[6] = 0x18;
+        create[7] = 0xCC;
+        create[8] = 0x01;
+        create[12] = 0x01;
+        if (!SendCommand(handle, pump, 0x0405, create.data(),
+                         static_cast<uint8_t>(create.size()), response))
+        {
+            std::puts("HCI Create Connection was rejected.");
+            goto connection_cleanup;
+        }
+        std::puts("Create Connection accepted; waiting for the baseband link...");
+
+        uint16_t connection_handle = 0;
+        bool connected = false;
+        while (!connected)
+        {
+            if (!pump.ReadNext(response, 20000))
+            {
+                std::puts("Timed out waiting for Connection Complete.");
+                goto connection_cleanup;
+            }
+            if (response[0] == 0x03 && response.size() >= 13)
+            {
+                if (!std::equal(remote.begin(), remote.end(), response.begin() + 5))
+                    continue;
+                if (response[2] != 0)
+                {
+                    std::printf("Connection failed: HCI status 0x%02X\n", response[2]);
+                    goto connection_cleanup;
+                }
+                connection_handle = static_cast<uint16_t>(response[3]) |
+                                    (static_cast<uint16_t>(response[4] & 0x0F) << 8);
+                connected = true;
+                std::printf("Baseband connection established (handle 0x%04X).\n",
+                            connection_handle);
+            }
+            else if (response[0] == 0x04 && response.size() >= 12)
+            {
+                // A remote-initiated connection can race with our Create Connection.
+                if (std::equal(remote.begin(), remote.end(), response.begin() + 2))
+                {
+                    const std::array<uint8_t, 7> accept{
+                        remote[0], remote[1], remote[2], remote[3], remote[4], remote[5], 0x00
+                    };
+                    std::vector<uint8_t> ignored;
+                    if (!SendCommand(handle, pump, 0x0409, accept.data(),
+                                     static_cast<uint8_t>(accept.size()), ignored))
+                        std::puts("Warning: Accept Connection Request failed.");
+                }
+            }
+            else
+            {
+                std::printf("HCI event 0x%02X while waiting for connection.\n", response[0]);
+            }
+        }
+
+        // Authentication is explicitly requested after the ACL/baseband link exists.
+        const std::array<uint8_t, 2> auth_parameters{
+            static_cast<uint8_t>(connection_handle & 0xFF),
+            static_cast<uint8_t>(connection_handle >> 8)
+        };
+        if (!SendCommand(handle, pump, 0x0411, auth_parameters.data(),
+                         static_cast<uint8_t>(auth_parameters.size()), response))
+        {
+            std::puts("HCI Authentication Requested was rejected.");
+            goto connection_cleanup;
+        }
+        std::puts("Authentication requested; handling Wii Remote pairing events...");
+
+        bool authenticated = false;
+        while (!authenticated)
+        {
+            if (!pump.ReadNext(response, 15000))
+            {
+                std::puts("Timed out waiting for Authentication Complete.");
+                goto connection_cleanup;
+            }
+
+            if (response[0] == 0x16 && response.size() >= 8)
+            {
+                // Legacy PIN is six raw address bytes, not six ASCII digits.
+                // SYNC bonds to the host address; 1+2 uses the remote address.
+                const auto& pin_address = sync_pairing ? local : remote;
+                std::array<uint8_t, 13> pin_reply{};
+                std::copy(response.begin() + 2, response.begin() + 8, pin_reply.begin());
+                pin_reply[6] = 6;
+                std::copy(pin_address.begin(), pin_address.end(), pin_reply.begin() + 7);
+                std::vector<uint8_t> pin_response;
+                if (!SendCommand(handle, pump, 0x040D, pin_reply.data(),
+                                 static_cast<uint8_t>(pin_reply.size()), pin_response))
+                {
+                    std::puts("PIN Code Request Reply failed.");
+                    goto connection_cleanup;
+                }
+                std::puts("Automatic legacy pairing response sent.");
+            }
+            else if (response[0] == 0x17 && response.size() >= 8)
+            {
+                // No stored link key yet: ask the remote to use legacy PIN pairing.
+                std::array<uint8_t, 6> address{};
+                std::copy(response.begin() + 2, response.begin() + 8, address.begin());
+                std::vector<uint8_t> key_response;
+                if (!SendCommand(handle, pump, 0x040C, address.data(),
+                                 static_cast<uint8_t>(address.size()), key_response))
+                {
+                    std::puts("Link Key Request Negative Reply failed.");
+                    goto connection_cleanup;
+                }
+                std::puts("No stored link key; requested legacy PIN authentication.");
+            }
+            else if (response[0] == 0x06 && response.size() >= 5)
+            {
+                const uint16_t event_handle = static_cast<uint16_t>(response[3]) |
+                    (static_cast<uint16_t>(response[4] & 0x0F) << 8);
+                if (event_handle != connection_handle)
+                    continue;
+                if (response[2] != 0)
+                {
+                    std::printf("Authentication failed: HCI status 0x%02X\n", response[2]);
+                    goto connection_cleanup;
+                }
+                authenticated = true;
+                std::puts("Authentication Complete: success.");
+            }
+            else if (response[0] == 0x18 && response.size() >= 25)
+            {
+                std::puts("Link Key Notification received (key not persisted by this diagnostic).");
+            }
+            else
+            {
+                std::printf("HCI event 0x%02X during authentication.\n", response[0]);
+            }
+        }
+
+        std::puts("Baseband authentication is complete. L2CAP HID is the next stage.");
+        success = true;
+    }
+
+connection_cleanup:
+    if (claimed)
+    {
+        const int release_rc = libusb_release_interface(handle, hci.number);
+        if (release_rc != LIBUSB_SUCCESS)
+            std::fprintf(stderr, "Interface release warning: %s\n",
+                         libusb_error_name(release_rc));
+    }
+    libusb_close(handle);
+    return success;
+}
+
 bool RunInquiry(libusb_device* device)
 {
     HciInterface hci;
@@ -341,14 +572,39 @@ int main(int argc, char** argv)
 {
     uint16_t vid = kDefaultVid;
     uint16_t pid = kDefaultPid;
-    if (argc == 3)
+    bool connect_mode = false;
+    bool sync_pairing = true;
+    std::array<uint8_t, 6> target{};
+
+    if (argc == 5 && std::strcmp(argv[1], "--connect") == 0)
+    {
+        connect_mode = true;
+        if (!ParseAddress(argv[2], target))
+        {
+            std::fprintf(stderr, "Invalid Bluetooth address: %s\n", argv[2]);
+            return 2;
+        }
+        if (std::strcmp(argv[3], "sync") == 0)
+            sync_pairing = true;
+        else if (std::strcmp(argv[3], "1+2") == 0)
+            sync_pairing = false;
+        else
+        {
+            std::puts("Pairing mode must be 'sync' or '1+2'.");
+            return 2;
+        }
+        vid = static_cast<uint16_t>(std::strtoul(argv[4], nullptr, 0));
+        pid = kDefaultPid;
+    }
+    else if (argc == 3)
     {
         vid = static_cast<uint16_t>(std::strtoul(argv[1], nullptr, 0));
         pid = static_cast<uint16_t>(std::strtoul(argv[2], nullptr, 0));
     }
     else if (argc != 1)
     {
-        std::printf("Usage: %s [VID PID]\n", argv[0]);
+        std::printf("Usage:\n  %s [VID PID]\n  %s --connect BD_ADDR sync|1+2 [VID]\n",
+                    argv[0], argv[0]);
         return 2;
     }
 
@@ -381,7 +637,8 @@ int main(int argc, char** argv)
 
         found = true;
         std::printf("Using USB Bluetooth adapter %04X:%04X\n", vid, pid);
-        passed = RunInquiry(devices[i]);
+        passed = connect_mode ? RunConnection(devices[i], target, sync_pairing)
+                              : RunInquiry(devices[i]);
         break;
     }
 
