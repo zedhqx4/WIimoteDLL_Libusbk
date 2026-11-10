@@ -1,0 +1,80 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows ${{ matrix.arch }} / MSVC
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86
+            triplet: x86-windows
+            cmake_arch: Win32
+          - arch: x64
+            triplet: x64-windows
+            cmake_arch: x64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install libusb
+        shell: pwsh
+        run: |
+          $vcpkg = $env:VCPKG_INSTALLATION_ROOT
+          if (-not $vcpkg) {
+            $vcpkg = "C:\vcpkg"
+          }
+          & "$vcpkg\vcpkg.exe" install "libusb:${{ matrix.triplet }}"
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg failed with exit code $LASTEXITCODE"
+          }
+          "VCPKG_ROOT=$vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -A ${{ matrix.cmake_arch }}
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Stage runtime files
+        shell: pwsh
+        run: |
+          $stage = "dist/wii-discovery-windows-${{ matrix.arch }}"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+
+          $exe = "build/Release/wii_discovery.exe"
+          if (-not (Test-Path $exe)) {
+            throw "Expected executable was not produced: $exe"
+          }
+          Copy-Item $exe $stage
+
+          $libusbDll = "$env:VCPKG_ROOT/installed/${{ matrix.triplet }}/bin/libusb-1.0.dll"
+          if (-not (Test-Path $libusbDll)) {
+            throw "libusb runtime DLL not found: $libusbDll"
+          }
+          Copy-Item $libusbDll $stage
+
+          Copy-Item README.md $stage
+
+      - name: Upload Windows ${{ matrix.arch }} artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wii-discovery-windows-${{ matrix.arch }}
+          path: dist/wii-discovery-windows-${{ matrix.arch }}/
+          if-no-files-found: error
+          retention-days: 14
