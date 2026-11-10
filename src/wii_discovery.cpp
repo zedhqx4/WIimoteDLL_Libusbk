@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <vector>
 
 namespace
@@ -95,7 +96,92 @@ bool ReadEvent(libusb_device_handle* handle, uint8_t endpoint,
     return true;
 }
 
-bool SendCommand(libusb_device_handle* handle, uint8_t event_endpoint,
+class HciEventPump
+{
+public:
+    HciEventPump(libusb_device_handle* handle, uint8_t event_endpoint)
+        : handle_(handle), event_endpoint_(event_endpoint)
+    {
+    }
+
+    bool ReadNext(std::vector<uint8_t>& event, unsigned timeout_ms)
+    {
+        if (!pending_.empty())
+        {
+            event = std::move(pending_.front());
+            pending_.pop_front();
+            return true;
+        }
+        return ReadEvent(handle_, event_endpoint_, event, timeout_ms);
+    }
+
+    bool WaitForCommandResponse(uint16_t opcode, std::vector<uint8_t>& response)
+    {
+        for (unsigned i = 0; i < 16; ++i)
+        {
+            const auto match = std::find_if(pending_.begin(), pending_.end(),
+                [opcode](const std::vector<uint8_t>& event)
+                {
+                    return IsCommandResponse(event, opcode);
+                });
+            if (match != pending_.end())
+            {
+                response = std::move(*match);
+                pending_.erase(match);
+                return CommandSucceeded(response);
+            }
+
+            std::vector<uint8_t> event;
+            if (!ReadEvent(handle_, event_endpoint_, event, kTimeoutMs))
+                return false;
+
+            if (IsCommandResponse(event, opcode))
+            {
+                response = std::move(event);
+                return CommandSucceeded(response);
+            }
+            pending_.push_back(std::move(event));
+        }
+
+        std::fprintf(stderr, "No completion/status event for HCI opcode 0x%04x\n", opcode);
+        return false;
+    }
+
+private:
+    static bool IsCommandResponse(const std::vector<uint8_t>& event, uint16_t opcode)
+    {
+        if (event.empty())
+            return false;
+        if (event[0] == kEventCommandComplete && event.size() >= 6)
+        {
+            const uint16_t received = static_cast<uint16_t>(event[3]) |
+                                      (static_cast<uint16_t>(event[4]) << 8);
+            return received == opcode;
+        }
+        if (event[0] == kEventCommandStatus && event.size() >= 6)
+        {
+            const uint16_t received = static_cast<uint16_t>(event[4]) |
+                                      (static_cast<uint16_t>(event[5]) << 8);
+            return received == opcode;
+        }
+        return false;
+    }
+
+    static bool CommandSucceeded(const std::vector<uint8_t>& event)
+    {
+        if (event[0] == kEventCommandComplete)
+            return event[5] == 0;
+        if (event[0] == kEventCommandStatus)
+            return event[2] == 0;
+        return false;
+    }
+
+    libusb_device_handle* handle_;
+    uint8_t event_endpoint_;
+    std::deque<std::vector<uint8_t>> pending_;
+};
+
+bool SendCommand(libusb_device_handle* handle, HciEventPump& event_pump,
                  uint16_t opcode, const uint8_t* parameters, uint8_t parameter_length,
                  std::vector<uint8_t>& response)
 {
@@ -121,35 +207,7 @@ bool SendCommand(libusb_device_handle* handle, uint8_t event_endpoint,
         return false;
     }
 
-    for (unsigned i = 0; i < 16; ++i)
-    {
-        if (!ReadEvent(handle, event_endpoint, response, kTimeoutMs))
-            return false;
-
-        const auto event_code = response[0];
-        if (event_code == kEventCommandComplete && response.size() >= 6)
-        {
-            const uint16_t received_opcode =
-                static_cast<uint16_t>(response[3]) |
-                (static_cast<uint16_t>(response[4]) << 8);
-            if (received_opcode != opcode)
-                continue;
-            return response[5] == 0;
-        }
-
-        if (event_code == kEventCommandStatus && response.size() >= 6)
-        {
-            const uint16_t received_opcode =
-                static_cast<uint16_t>(response[4]) |
-                (static_cast<uint16_t>(response[5]) << 8);
-            if (received_opcode != opcode)
-                continue;
-            return response[2] == 0;
-        }
-    }
-
-    std::fprintf(stderr, "No completion/status event for HCI opcode 0x%04x\n", opcode);
-    return false;
+    return event_pump.WaitForCommandResponse(opcode, response);
 }
 
 void PrintAddress(const uint8_t* address)
@@ -198,7 +256,8 @@ bool RunInquiry(libusb_device* device)
 
     {
         std::vector<uint8_t> event;
-        if (!SendCommand(handle, hci.event_endpoint, 0x0C03, nullptr, 0, event))
+        HciEventPump event_pump(handle, hci.event_endpoint);
+        if (!SendCommand(handle, event_pump, 0x0C03, nullptr, 0, event))
         {
             std::puts("HCI Reset failed.");
             goto cleanup;
@@ -209,7 +268,7 @@ bool RunInquiry(libusb_device* device)
         constexpr std::array<uint8_t, 5> inquiry_parameters{
             0x33, 0x8B, 0x9E, 0x08, 0x00
         };
-        if (!SendCommand(handle, hci.event_endpoint, 0x0401,
+        if (!SendCommand(handle, event_pump, 0x0401,
                          inquiry_parameters.data(),
                          static_cast<uint8_t>(inquiry_parameters.size()), event))
         {
@@ -221,7 +280,7 @@ bool RunInquiry(libusb_device* device)
         bool inquiry_complete = false;
         while (!inquiry_complete)
         {
-            if (!ReadEvent(handle, hci.event_endpoint, event, 15000))
+            if (!event_pump.ReadNext(event, 15000))
                 goto cleanup;
 
             switch (event[0])
