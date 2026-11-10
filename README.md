@@ -41,17 +41,19 @@ The optional adapter VID/PID can be supplied after the pairing mode:
 wii_discovery.exe --connect 40:D2:8A:07:EB:36 sync 0x0A12 0x0001
 ```
 
-The legacy PIN is handled internally as six raw Bluetooth address bytes; there is no user-entered PIN. SYNC uses the host adapter address (bonding), while 1+2 uses the Wii Remote address (temporary pairing). The diagnostic currently does not persist link keys. The latest development step adds USB ACL bulk transport and attempts the two Wii Remote HID L2CAP PSMs (0x0011 control and 0x0013 interrupt). These channels still need L2CAP configuration and HIDP setup before input reports can flow.
+The legacy PIN is handled internally as six raw Bluetooth address bytes; there is no user-entered PIN. SYNC uses the host adapter address (bonding), while 1+2 uses the Wii Remote address (temporary pairing). The diagnostic currently does not persist link keys.
 
-**Important:** CI compilation is not hardware verification. The new connection/authentication path must be tested against the CSR8510 and a real Wii Remote before it is considered working.
+**Hardware-verified status:** the SYNC-button path has been tested with a real Wii Remote and a CSR8510 A10 (0A12:0001) using libusbK on Windows. The test completed HCI discovery, baseband connection, legacy PIN authentication, link encryption, L2CAP control/interrupt setup and HIDP input reception; real core-button reports were received. This is a hardware result for that adapter and remote, not a claim that every USB Bluetooth adapter is compatible.
+
+The current branch still builds **only the standalone wii_discovery.exe diagnostic**. It is not yet the reusable DLL/library. Link-key persistence, a public application-independent API, adapter enumeration/selection and integration tests remain to be implemented in this repository. The separate HOTD2RE integration currently contains a second implementation; the long-term plan is to extract and share the proven protocol core rather than maintain two independent stacks.
 
 ## Development order
 
-1. **Discovery and baseband authentication:** HCI inquiry, connection, authentication, and link-key handling for both 1+2 and SYNC.
-2. **L2CAP:** establish and configure the HID control and interrupt channels; validate ACL packet handling against the real remote.
-3. **HIDP:** configure the remote and receive input reports.
-4. **Reusable host/API:** separate the Bluetooth host from game-specific input adapters.
-5. **Pairing utility:** provide a standalone tool to inspect the adapter and manage remote connections.
+1. **Extract a shared host core:** move the proven HCI/L2CAP/HIDP implementation into a library used by both the diagnostic CLI and game integrations.
+2. **Adapter enumeration and selection:** expose all claimable standard USB Bluetooth HCI devices, allow explicit VID/PID selection, and keep automatic selection as an option.
+3. **Reusable API and lifecycle:** provide documented C and/or C++ interfaces, caller-controlled link-key storage, asynchronous report delivery, and clean shutdown.
+4. **Compatibility validation:** test more adapter chipsets, Windows driver configurations, Wii Remote pairing modes and reconnect behavior.
+5. **Distribution:** provide CMake packages, x86/x64 Windows builds, a sample client and diagnostics.
 
 ## License and project independence
 
