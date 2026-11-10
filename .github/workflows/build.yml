@@ -1,0 +1,71 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows ${{ matrix.arch }} / MSVC
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86
+            cmake_arch: Win32
+          - arch: x64
+            cmake_arch: x64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -A ${{ matrix.cmake_arch }}
+          -DWII_BT_BUILD_HOST=ON
+          -DWII_BT_BUILD_TOOLS=ON
+          -DWII_BT_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Stage runtime files
+        shell: pwsh
+        run: |
+          $stage = "dist/wii-bluetooth-windows-${{ matrix.arch }}"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+
+          foreach ($file in @(
+            "build/Release/wii_discovery.exe",
+            "build/Release/wii_bt_passthrough.dll",
+            "build/Release/libusb-1.0.dll"
+          )) {
+            if (-not (Test-Path $file)) {
+              throw "Expected runtime file was not produced: $file"
+            }
+            Copy-Item $file $stage
+          }
+
+          Copy-Item README.md, LICENSE $stage
+          New-Item -ItemType Directory -Force -Path "$stage/include" | Out-Null
+          Copy-Item include/*.h "$stage/include"
+
+      - name: Upload Windows ${{ matrix.arch }} artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wii-bluetooth-host-windows-${{ matrix.arch }}
+          path: dist/wii-bluetooth-windows-${{ matrix.arch }}/
+          if-no-files-found: error
+          retention-days: 14
