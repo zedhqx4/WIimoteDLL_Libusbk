@@ -383,13 +383,13 @@ bool HandleConfigurationRequest(libusb_device_handle* handle, const HciInterface
     const uint16_t destination_cid = ReadLe16(packet, 8);
     const uint16_t flags = ReadLe16(packet, 10);
     std::printf("L2CAP Configuration Request: id=%u, destination CID=0x%04X, "
-                "flags=0x%04X, options=%u bytes.\\n",
+                "flags=0x%04X, options=%u bytes.\n",
                 identifier, destination_cid, flags, command_length - 4);
 
     if (flags != 0)
     {
         std::printf("L2CAP Configuration Request id=%u uses continuation flags; "
-                    "not yet supported.\\n", identifier);
+                    "not yet supported.\n", identifier);
         return false;
     }
 
@@ -398,7 +398,7 @@ bool HandleConfigurationRequest(libusb_device_handle* handle, const HciInterface
     if (!channel)
     {
         std::printf("L2CAP Configuration Request id=%u targets unknown local CID 0x%04X "
-                    "(control=0x%04X, interrupt=0x%04X).\\n",
+                    "(control=0x%04X, interrupt=0x%04X).\n",
                     identifier, destination_cid, control.local_cid, interrupt.local_cid);
         return false;
     }
@@ -483,7 +483,7 @@ bool ConfigureL2capChannels(libusb_device_handle* handle, const HciInterface& hc
         if (packet.size() < 8u + command_length)
             continue;
 
-        std::printf("L2CAP signaling RX: code=0x%02X, id=%u, length=%u.\\n",
+        std::printf("L2CAP signaling RX: code=0x%02X, id=%u, length=%u.\n",
                     code, identifier, command_length);
 
         if (code == 0x04)
