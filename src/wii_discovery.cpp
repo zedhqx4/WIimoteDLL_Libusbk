@@ -397,8 +397,7 @@ bool SendL2capSignal(libusb_device_handle* handle, const HciInterface& hci,
 }
 
 bool SendConfigurationRequest(libusb_device_handle* handle, const HciInterface& hci,
-                              uint16_t handle_id, L2capChannel& channel)
-{
+                              uint16_t handle_id, L2capChannel& channel){
     std::vector<uint8_t> body;
     AppendLe16(body, channel.remote_cid);
     AppendLe16(body, 0);
@@ -595,6 +594,30 @@ bool SendHidpOutput(libusb_device_handle* handle, const HciInterface& hci,
     return true;
 }
 
+bool SendHidpControlSetReport(libusb_device_handle* handle, const HciInterface& hci,
+                              uint16_t connection_handle, uint16_t control_cid,
+                              const std::vector<uint8_t>& data_report,
+                              const char* description)
+{
+    if (data_report.size() < 2 || data_report[0] != 0xA2)
+        return false;
+    // Legacy RVL-CNT-01 remotes also accept HIDP SET_REPORT on Control.
+    // RVL-CNT-01-TR remotes do not; DATA on Interrupt remains the primary path.
+    std::vector<uint8_t> packet{0x52};
+    packet.insert(packet.end(), data_report.begin() + 1, data_report.end());
+    if (!SendAcl(handle, hci.acl_out_endpoint, connection_handle, control_cid,
+                 packet.data(), static_cast<uint16_t>(packet.size())))
+    {
+        std::printf("HIDP Control SET_REPORT failed (%s).\n", description);
+        return false;
+    }
+    std::printf("HIDP Control SET_REPORT probe sent (%s):", description);
+    for (const uint8_t byte : packet)
+        std::printf(" %02X", byte);
+    std::printf("\n");
+    return true;
+}
+
 void PrintWiiButtons(uint16_t buttons)
 {
     struct ButtonName { uint16_t mask; const char* name; };
@@ -625,14 +648,21 @@ void PrintWiiButtons(uint16_t buttons)
 }
 
 bool RunHidpInputTest(libusb_device_handle* handle, const HciInterface& hci,
-                      uint16_t connection_handle, uint16_t interrupt_local_cid,
+                      uint16_t connection_handle, uint16_t control_local_cid,
+                      uint16_t control_remote_cid, uint16_t interrupt_local_cid,
                       uint16_t interrupt_remote_cid)
 {
     // HIDP DATA output reports are carried on the HID Interrupt L2CAP channel.
     // Set player LED 1, then explicitly select the core-button input report.
     const std::vector<uint8_t> led_report{0xA2, 0x11, 0x10};
     const std::vector<uint8_t> mode_report{0xA2, 0x12, 0x00, 0x30};
-    if (!SendHidpOutput(handle, hci, connection_handle, interrupt_remote_cid,
+    // Probe legacy SET_REPORT on Control, then send the normal DATA reports
+    // on Interrupt. This tests both supported Wii Remote transport variants.
+    if (!SendHidpControlSetReport(handle, hci, connection_handle, control_remote_cid,
+                                  led_report, "Player LED 1") ||
+        !SendHidpControlSetReport(handle, hci, connection_handle, control_remote_cid,
+                                  mode_report, "Core buttons report mode 0x30") ||
+        !SendHidpOutput(handle, hci, connection_handle, interrupt_remote_cid,
                         led_report, "Player LED 1") ||
         !SendHidpOutput(handle, hci, connection_handle, interrupt_remote_cid,
                         mode_report, "Core buttons report mode 0x30"))
@@ -693,10 +723,29 @@ bool RunHidpInputTest(libusb_device_handle* handle, const HciInterface& hci,
         if (packet.size() < 4)
             continue;
         const uint16_t packet_cid = ReadLe16(packet, 2);
+        if (packet_cid == control_local_cid)
+        {
+            std::printf("HIDP Control RX:");
+            for (size_t i = 4; i < packet.size(); ++i)
+                std::printf(" %02X", packet[i]);
+            if (packet.size() >= 5 && packet[4] <= 0x0F)
+            {
+                static constexpr const char* handshake_names[] = {
+                    "success", "not ready", "invalid report ID", "unsupported request",
+                    "invalid parameter", "unknown error", "unsupported report type"
+                };
+                const uint8_t result = packet[4];
+                std::printf(" [HIDP handshake 0x%02X: %s]",
+                            result, result < 7 ? handshake_names[result] : "reserved");
+            }
+            std::printf("\n");
+            continue;
+        }
         if (packet_cid != interrupt_local_cid)
         {
-            std::printf("ACL data arrived on L2CAP CID 0x%04X (not HID Interrupt local CID 0x%04X).\n",
-                        packet_cid, interrupt_local_cid);
+            std::printf("ACL data arrived on L2CAP CID 0x%04X (control local 0x%04X, "
+                        "interrupt local 0x%04X).\n",
+                        packet_cid, control_local_cid, interrupt_local_cid);
             continue;
         }
 
@@ -708,7 +757,14 @@ bool RunHidpInputTest(libusb_device_handle* handle, const HciInterface& hci,
         }
 
         const uint8_t report_id = packet[5];
-        if (report_id == 0x30 && packet.size() >= 8)
+        if (report_id == 0x22 || report_id == 0x20)
+        {
+            std::printf("Wii Remote report 0x%02X received:", report_id);
+            for (size_t i = 6; i < packet.size(); ++i)
+                std::printf(" %02X", packet[i]);
+            std::printf("\n");
+        }
+        else if (report_id == 0x30 && packet.size() >= 8)
         {
             const uint16_t buttons = static_cast<uint16_t>(
                 (static_cast<uint16_t>(packet[6]) << 8) | packet[7]);
@@ -797,8 +853,7 @@ bool RunConnection(libusb_device* device, const std::array<uint8_t, 6>& remote,
         HciEventPump pump(handle, hci.event_endpoint);
         std::vector<uint8_t> response;
         if (!SendCommand(handle, pump, 0x0C03, nullptr, 0, response))
-        {
-            std::puts("HCI Reset failed.");
+        {            std::puts("HCI Reset failed.");
             goto connection_cleanup;
         }
         std::puts("HCI Reset: OK");
@@ -972,7 +1027,8 @@ bool RunConnection(libusb_device* device, const std::array<uint8_t, 6>& remote,
                                     pending_signaling))
             goto connection_cleanup;
         std::puts("HID L2CAP Control and Interrupt channels are ready for HIDP.");
-        success = RunHidpInputTest(handle, hci, connection_handle, 0x0041, interrupt_cid);
+        success = RunHidpInputTest(handle, hci, connection_handle,
+                                   0x0040, control_cid, 0x0041, interrupt_cid);
     }
 
 connection_cleanup:
