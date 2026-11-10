@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -228,7 +229,7 @@ bool RunInquiry(libusb_device* device)
             case kEventInquiryResult:
             {
                 const uint8_t count = event[2];
-                constexpr size_t kResultSize = 14;
+                constexpr size_t kResultSize = 13;
                 if (event.size() < 3 + static_cast<size_t>(count) * kResultSize)
                 {
                     std::puts("Ignoring malformed Inquiry Result event.");
