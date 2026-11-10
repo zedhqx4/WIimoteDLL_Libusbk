@@ -40,4 +40,4 @@ Third-party dependencies retain their own licenses. In particular, libusb is LGP
 
 ## Status
 
-The repository was initially empty. Implementation has not started; the verified hardware baseline above comes from the separate HOTD2RE probe.
+The default branch is an initial project scaffold. Active protocol development is on [feature/hci-discovery-pairing](https://github.com/zedhqx4/WIimoteDLL_Libusbk/tree/feature/hci-discovery-pairing). That branch contains a standalone diagnostic executable whose SYNC pairing, secured L2CAP HID channels and real Wii Remote button reports have been verified on a CSR8510 A10 with libusbK on Windows. It is **not yet a reusable DLL/library**; extraction into an application-independent library and validation with additional adapters are still planned.
