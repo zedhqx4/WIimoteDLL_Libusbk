@@ -30,9 +30,13 @@ These checks do not yet implement discovery, pairing, L2CAP, or HID.
 4. **Reusable host/API:** separate the Bluetooth host from game-specific input adapters.
 5. **Pairing/diagnostic utility:** provide a standalone tool to inspect the adapter and manage remote connections.
 
-## Licensing
+## License
 
-The repository is intended to host a separately distributed component. Any Dolphin-derived source must retain its applicable GPL-2.0-or-later notices and corresponding source-distribution obligations. Game projects communicate with the host through a documented interface; licensing implications of the concrete integration model must be reviewed before distribution.
+Original code in this repository is released under **0BSD** (see [LICENSE](LICENSE)). This is a permissive, OSI-approved license that allows use, modification, redistribution, and incorporation into other projects, including closed-source and commercial applications, without an attribution condition.
+
+The implementation is inspired by Dolphin's Bluetooth passthrough feature, but this repository does not copy or relicense Dolphin source code. Any future Dolphin-derived code must retain its GPL-2.0-or-later license and notices and must be reviewed separately; it cannot be relicensed as 0BSD.
+
+Third-party dependencies retain their own licenses. In particular, libusb is LGPL-2.1-or-later; the 0BSD license applies only to this repository's original code.
 
 ## Status
 
