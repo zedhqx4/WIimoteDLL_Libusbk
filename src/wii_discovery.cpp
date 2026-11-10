@@ -1,11 +1,13 @@
 #include <libusb.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <utility>
 #include <vector>
 
 namespace
