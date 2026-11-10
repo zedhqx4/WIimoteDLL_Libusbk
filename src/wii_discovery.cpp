@@ -485,15 +485,15 @@ bool ConfigureL2capChannels(libusb_device_handle* handle, const HciInterface& hc
                                     identifier == interrupt.config_identifier ? &interrupt : nullptr;
             if (!channel)
                 continue;
-            if (source_cid != channel->remote_cid || flags != 0)
+            // Configuration Response SCID identifies the endpoint that sent
+            // our Configuration Request: it must echo our local CID.
+            if (source_cid != channel->local_cid || flags != 0)
             {
-                std::printf("L2CAP PSM 0x%04X Configuration Response details: id=%u, "
-                            "source CID=0x%04X (expected remote 0x%04X), "
-                            "local CID=0x%04X, flags=0x%04X, result=0x%04X.\\n",
-                            channel->psm, identifier, source_cid, channel->remote_cid,
-                            channel->local_cid, flags, result);
-                // Preserve the connection for diagnosis; an invalid response
-                // must not be treated as successful configuration.
+                std::printf("L2CAP PSM 0x%04X Configuration Response invalid: id=%u, "
+                            "source CID=0x%04X (expected local 0x%04X), "
+                            "remote CID=0x%04X, flags=0x%04X, result=0x%04X.\\n",
+                            channel->psm, identifier, source_cid, channel->local_cid,
+                            channel->remote_cid, flags, result);
                 continue;
             }
             if (result != 0)
