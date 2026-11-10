@@ -575,6 +575,117 @@ bool ConfigureL2capChannels(libusb_device_handle* handle, const HciInterface& hc
     return false;
 }
 
+
+bool SendHidpOutput(libusb_device_handle* handle, const HciInterface& hci,
+                    uint16_t connection_handle, uint16_t interrupt_cid,
+                    const std::vector<uint8_t>& report, const char* description)
+{
+    if (report.size() < 2 || report[0] != 0xA2)
+        return false;
+    if (!SendAcl(handle, hci.acl_out_endpoint, connection_handle, interrupt_cid,
+                 report.data(), static_cast<uint16_t>(report.size())))
+    {
+        std::printf("HIDP output failed (%s).\n", description);
+        return false;
+    }
+    std::printf("HIDP output sent (%s):", description);
+    for (const uint8_t byte : report)
+        std::printf(" %02X", byte);
+    std::printf("\n");
+    return true;
+}
+
+void PrintWiiButtons(uint16_t buttons)
+{
+    struct ButtonName { uint16_t mask; const char* name; };
+    static constexpr ButtonName names[] = {
+        {0x0001, "2"}, {0x0002, "1"}, {0x0004, "B"}, {0x0008, "A"},
+        {0x0010, "Minus"}, {0x0080, "Home"}, {0x0100, "Left"},
+        {0x0200, "Right"}, {0x0400, "Down"}, {0x0800, "Up"},
+        {0x1000, "Plus"}
+    };
+
+    if (buttons == 0)
+    {
+        std::printf("none");
+        return;
+    }
+
+    bool first = true;
+    for (const auto& button : names)
+    {
+        if ((buttons & button.mask) == 0)
+            continue;
+        std::printf("%s%s", first ? "" : " + ", button.name);
+        first = false;
+    }
+    const uint16_t known = 0x1F9F;
+    if ((buttons & ~known) != 0)
+        std::printf("%sUnknown(0x%04X)", first ? "" : " + ", buttons & ~known);
+}
+
+bool RunHidpInputTest(libusb_device_handle* handle, const HciInterface& hci,
+                      uint16_t connection_handle, uint16_t interrupt_cid)
+{
+    // HIDP DATA output reports are carried on the HID Interrupt L2CAP channel.
+    // Set player LED 1, then explicitly select the core-button input report.
+    const std::vector<uint8_t> led_report{0xA2, 0x11, 0x10};
+    const std::vector<uint8_t> mode_report{0xA2, 0x12, 0x00, 0x30};
+    if (!SendHidpOutput(handle, hci, connection_handle, interrupt_cid,
+                        led_report, "Player LED 1") ||
+        !SendHidpOutput(handle, hci, connection_handle, interrupt_cid,
+                        mode_report, "Core buttons report mode 0x30"))
+        return false;
+
+    std::puts("HIDP input test active for 45 seconds. Press and release buttons on the Wii Remote.");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(45);
+    uint16_t previous_buttons = 0xFFFF;
+    unsigned input_reports = 0;
+
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        std::vector<uint8_t> packet;
+        if (!ReadAcl(handle, hci.acl_in_endpoint, connection_handle, packet, 1000, true))
+            continue;
+
+        if (packet.size() < 4 || ReadLe16(packet, 2) != interrupt_cid)
+            continue;
+
+        if (packet.size() < 6 || packet[4] != 0xA1)
+        {
+            std::printf("HIDP packet on Interrupt CID 0x%04X is not an input DATA report.\n",
+                        interrupt_cid);
+            continue;
+        }
+
+        const uint8_t report_id = packet[5];
+        if (report_id == 0x30 && packet.size() >= 8)
+        {
+            const uint16_t buttons = static_cast<uint16_t>(
+                (static_cast<uint16_t>(packet[6]) << 8) | packet[7]);
+            ++input_reports;
+            if (buttons != previous_buttons)
+            {
+                std::printf("Wii Remote buttons: 0x%04X [", buttons);
+                PrintWiiButtons(buttons);
+                std::printf("]\n");
+                previous_buttons = buttons;
+            }
+        }
+        else
+        {
+            std::printf("HIDP input report 0x%02X received (%zu bytes).\n",
+                        report_id, packet.size() - 4);
+        }
+    }
+
+    std::printf("HIDP input test finished: %u core-button reports received.\n",
+                input_reports);
+    if (input_reports == 0)
+        std::puts("No core-button reports arrived; verify the remote stayed connected and try pressing buttons.");
+    return input_reports != 0;
+}
+
 void PrintAddress(const uint8_t* address)
 {
     std::printf("%02X:%02X:%02X:%02X:%02X:%02X",
@@ -812,7 +923,7 @@ bool RunConnection(libusb_device* device, const std::array<uint8_t, 6>& remote,
                                     pending_signaling))
             goto connection_cleanup;
         std::puts("HID L2CAP Control and Interrupt channels are ready for HIDP.");
-        success = true;
+        success = RunHidpInputTest(handle, hci, connection_handle, interrupt_cid);
     }
 
 connection_cleanup:
