@@ -914,8 +914,10 @@ bool RunConnection(libusb_device* device, const std::array<uint8_t, 6>& remote,
                 connection_handle = static_cast<uint16_t>(response[3]) |
                                     (static_cast<uint16_t>(response[4] & 0x0F) << 8);
                 connected = true;
-                std::printf("Baseband connection established (handle 0x%04X).\n",
-                            connection_handle);
+                std::printf("Baseband connection established (handle 0x%04X, encryption=%s).\n",
+                            connection_handle,
+                            response.size() >= 13 && response[12] == 0x01 ? "on" :
+                            response.size() >= 13 && response[12] == 0x00 ? "off" : "unknown");
             }
             else if (response[0] == 0x04 && response.size() >= 12)
             {
@@ -1015,7 +1017,57 @@ bool RunConnection(libusb_device* device, const std::array<uint8_t, 6>& remote,
             }
         }
 
-        std::puts("Baseband authentication is complete. Opening HID L2CAP channels...");
+        // Authentication and link encryption are separate BR/EDR procedures.
+        // HID requires link security; explicitly request encryption and wait for
+        // the matching Encryption Change event before opening HID channels.
+        const std::array<uint8_t, 3> encryption_parameters{
+            static_cast<uint8_t>(connection_handle & 0xFF),
+            static_cast<uint8_t>(connection_handle >> 8),
+            0x01
+        };
+        if (!SendCommand(handle, pump, 0x0413, encryption_parameters.data(),
+                         static_cast<uint8_t>(encryption_parameters.size()), response))
+        {
+            std::puts("HCI Set Connection Encryption command was rejected.");
+            goto connection_cleanup;
+        }
+        std::puts("HCI Set Connection Encryption accepted; waiting for Encryption Change...");
+        bool encrypted = false;
+        const auto encryption_deadline = std::chrono::steady_clock::now() +
+                                         std::chrono::seconds(15);
+        while (std::chrono::steady_clock::now() < encryption_deadline)
+        {
+            if (!pump.ReadNext(response, 2000))
+                continue;
+            if (response[0] == 0x08 && response.size() >= 6)
+            {
+                const uint16_t event_handle = static_cast<uint16_t>(response[3]) |
+                    (static_cast<uint16_t>(response[4] & 0x0F) << 8);
+                if (event_handle != connection_handle)
+                    continue;
+                if (response[2] != 0 || response[5] != 0x01)
+                {
+                    std::printf("Encryption Change failed: status=0x%02X enabled=0x%02X.\n",
+                                response[2], response[5]);
+                    break;
+                }
+                encrypted = true;
+                std::puts("HCI Encryption Change: link encryption is ON.");
+                break;
+            }
+            if (response[0] == 0x18 && response.size() >= 25)
+                std::puts("Link Key Notification received during encryption setup.");
+            else
+                std::printf("HCI event 0x%02X while waiting for Encryption Change.\n",
+                            response[0]);
+        }
+        if (!encrypted)
+        {
+            std::puts("Link encryption was not confirmed; refusing to start HIDP test.");
+            goto connection_cleanup;
+        }
+
+        std::puts("Baseband authentication and link encryption are complete. Opening HID L2CAP channels...");
         uint16_t control_cid = 0;
         uint16_t interrupt_cid = 0;
         std::deque<std::vector<uint8_t>> pending_signaling;
