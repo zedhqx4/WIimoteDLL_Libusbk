@@ -645,8 +645,49 @@ bool RunHidpInputTest(libusb_device_handle* handle, const HciInterface& hci,
 
     while (std::chrono::steady_clock::now() < deadline)
     {
+        // HCI events use a separate USB interrupt endpoint. Keep draining it
+        // while waiting for ACL input so disconnects and controller events are
+        // visible instead of mistaking an idle ACL endpoint for a live link.
+        std::array<uint8_t, 260> event{};
+        int event_size = 0;
+        const int event_rc = libusb_interrupt_transfer(
+            handle, hci.event_endpoint, event.data(),
+            static_cast<int>(event.size()), &event_size, 20);
+        if (event_rc == LIBUSB_SUCCESS && event_size >= 2 &&
+            event_size >= 2 + event[1])
+        {
+            const uint8_t event_code = event[0];
+            if (event_code == 0x05 && event_size >= 6)
+            {
+                const uint16_t event_handle = static_cast<uint16_t>(event[3]) |
+                    (static_cast<uint16_t>(event[4] & 0x0F) << 8);
+                if (event_handle == connection_handle)
+                {
+                    std::printf("HCI Disconnection Complete: status=0x%02X reason=0x%02X.\\n",
+                                event[2], event[5]);
+                    break;
+                }
+            }
+            else if (event_code == 0x13 && event_size >= 3)
+            {
+                std::printf("HCI Number Of Completed Packets event received (%u handle entries).\\n",
+                            event[2]);
+            }
+            else
+            {
+                std::printf("HCI event 0x%02X received during HIDP input (%d parameter bytes).\\n",
+                            event_code, event[1]);
+            }
+        }
+        else if (event_rc != LIBUSB_SUCCESS &&
+                 event_rc != LIBUSB_ERROR_TIMEOUT)
+        {
+            std::printf("HCI event endpoint read failed: %s.\\n",
+                        libusb_error_name(event_rc));
+        }
+
         std::vector<uint8_t> packet;
-        if (!ReadAcl(handle, hci.acl_in_endpoint, connection_handle, packet, 1000, true))
+        if (!ReadAcl(handle, hci.acl_in_endpoint, connection_handle, packet, 100, true))
             continue;
 
         if (packet.size() < 4)
