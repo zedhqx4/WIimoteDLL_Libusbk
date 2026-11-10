@@ -1650,7 +1650,7 @@ private:
 
 } // namespace
 
-#extern "C" WII_BT_API uint32_t WII_BT_CALL WiiBt_GetApiVersion(void) { return WII_BT_API_VERSION; }
+extern "C" WII_BT_API uint32_t WII_BT_CALL WiiBt_GetApiVersion(void) { return WII_BT_API_VERSION; }
 extern "C" WII_BT_API int WII_BT_CALL WiiBt_HasCompatibleAdapter(int32_t vid, int32_t pid) {
     return HasUsbHciAdapter(vid, pid) ? 1 : 0;
 }
@@ -1709,6 +1709,5 @@ extern "C" WII_BT_API int WII_BT_CALL WiiBt_Poll(void* instance, WiiBtSnapshot* 
         return 1;
     } catch (...) { return 0; }
 }
-#endif
 } // namespace input::wii
 #endif
