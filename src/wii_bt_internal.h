@@ -20,6 +20,9 @@ struct Snapshot {
     bool scanning = false;
     std::string message = "Select Connect and press the red SYNC button";
 };
+bool DecodeReport(const uint8_t* bytes, size_t size, Remote& remote);
+std::array<uint8_t, 22> WriteRegister(uint32_t address, const uint8_t* bytes, size_t size);
+
 class Backend {
 public:
     virtual ~Backend() = default;
