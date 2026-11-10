@@ -487,9 +487,14 @@ bool ConfigureL2capChannels(libusb_device_handle* handle, const HciInterface& hc
                 continue;
             if (source_cid != channel->remote_cid || flags != 0)
             {
-                std::printf("L2CAP PSM 0x%04X received mismatched Configuration Response.\n",
-                            channel->psm);
-                return false;
+                std::printf("L2CAP PSM 0x%04X Configuration Response details: id=%u, "
+                            "source CID=0x%04X (expected remote 0x%04X), "
+                            "local CID=0x%04X, flags=0x%04X, result=0x%04X.\\n",
+                            channel->psm, identifier, source_cid, channel->remote_cid,
+                            channel->local_cid, flags, result);
+                // Preserve the connection for diagnosis; an invalid response
+                // must not be treated as successful configuration.
+                continue;
             }
             if (result != 0)
             {
