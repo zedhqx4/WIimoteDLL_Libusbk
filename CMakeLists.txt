@@ -20,7 +20,7 @@ else()
 endif()
 
 if(WIN32)
-  add_library(wii_bt_passthrough SHARED src/wii_bt_passthrough.cpp)
+  add_library(wii_bt_passthrough SHARED src/wii_bt_passthrough.cpp src/wii_bt_reports.cpp)
   target_include_directories(wii_bt_passthrough
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_compile_definitions(wii_bt_passthrough PRIVATE
@@ -43,6 +43,9 @@ if(WIN32)
   target_link_libraries(wii_bt_api_smoke PRIVATE wii_bt_passthrough)
   enable_testing()
   add_test(NAME wii_bt_api_smoke COMMAND wii_bt_api_smoke)
+  add_executable(wii_bt_reports_test tests/wii_bt_reports_test.cpp src/wii_bt_reports.cpp)
+  target_include_directories(wii_bt_reports_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  add_test(NAME wii_bt_reports_test COMMAND wii_bt_reports_test)
 endif()
 
 if(MSVC)
