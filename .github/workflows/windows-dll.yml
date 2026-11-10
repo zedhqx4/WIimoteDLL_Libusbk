@@ -1,0 +1,32 @@
+name: Windows DLL build
+
+on:
+  push:
+    branches: [main, "feature/**"]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: Win32
+            triplet: x86-windows
+          - arch: x64
+            triplet: x64-windows
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install libusb
+        shell: pwsh
+        run: |
+          vcpkg install libusb:${{ matrix.triplet }}
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S . -B build -A ${{ matrix.arch }} -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+      - name: Build
+        run: cmake --build build --config Release
+      - name: Test API contract
+        run: ctest --test-dir build -C Release --output-on-failure
