@@ -326,6 +326,190 @@ bool ConnectL2capPsm(libusb_device_handle* handle, const HciInterface& hci,
     return false;
 }
 
+
+struct L2capChannel
+{
+    uint16_t psm = 0;
+    uint16_t local_cid = 0;
+    uint16_t remote_cid = 0;
+    uint8_t config_identifier = 0;
+    bool config_response_received = false;
+    bool peer_config_received = false;
+};
+
+uint16_t ReadLe16(const std::vector<uint8_t>& data, size_t offset)
+{
+    return static_cast<uint16_t>(data[offset]) |
+           (static_cast<uint16_t>(data[offset + 1]) << 8);
+}
+
+void AppendLe16(std::vector<uint8_t>& data, uint16_t value)
+{
+    data.push_back(static_cast<uint8_t>(value));
+    data.push_back(static_cast<uint8_t>(value >> 8));
+}
+
+bool SendL2capSignal(libusb_device_handle* handle, const HciInterface& hci,
+                     uint16_t handle_id, uint8_t code, uint8_t identifier,
+                     const std::vector<uint8_t>& body)
+{
+    std::vector<uint8_t> signal{code, identifier};
+    AppendLe16(signal, static_cast<uint16_t>(body.size()));
+    signal.insert(signal.end(), body.begin(), body.end());
+    return SendAcl(handle, hci.acl_out_endpoint, handle_id, 0x0001,
+                   signal.data(), static_cast<uint16_t>(signal.size()));
+}
+
+bool SendConfigurationRequest(libusb_device_handle* handle, const HciInterface& hci,
+                              uint16_t handle_id, L2capChannel& channel)
+{
+    std::vector<uint8_t> body;
+    AppendLe16(body, channel.remote_cid);
+    AppendLe16(body, 0);
+    return SendL2capSignal(handle, hci, handle_id, 0x04,
+                           channel.config_identifier, body);
+}
+
+bool HandleConfigurationRequest(libusb_device_handle* handle, const HciInterface& hci,
+                                 uint16_t handle_id, const std::vector<uint8_t>& packet,
+                                 L2capChannel& control, L2capChannel& interrupt)
+{
+    if (packet.size() < 12 || packet[4] != 0x04)
+        return false;
+    const uint8_t identifier = packet[5];
+    const uint16_t command_length = ReadLe16(packet, 6);
+    if (command_length < 4 || packet.size() < 8u + command_length)
+        return false;
+    const uint16_t destination_cid = ReadLe16(packet, 8);
+    const uint16_t flags = ReadLe16(packet, 10);
+    if (flags != 0)
+        return false;
+
+    L2capChannel* channel = destination_cid == control.local_cid ? &control :
+                            destination_cid == interrupt.local_cid ? &interrupt : nullptr;
+    if (!channel)
+        return false;
+
+    size_t offset = 12;
+    const size_t end = 8u + command_length;
+    std::vector<uint8_t> unknown_options;
+    while (offset < end)
+    {
+        if (end - offset < 2)
+            return false;
+        const uint8_t type = packet[offset];
+        const uint8_t option_length = packet[offset + 1];
+        if (offset + 2u + option_length > end)
+            return false;
+        const uint8_t option_type = type & 0x7F;
+        if (option_type == 0x01)
+        {
+            if (option_length != 2 || ReadLe16(packet, offset + 2) < 48)
+                return false;
+        }
+        else if ((type & 0x80) == 0)
+        {
+            unknown_options.insert(unknown_options.end(),
+                packet.begin() + static_cast<std::ptrdiff_t>(offset),
+                packet.begin() + static_cast<std::ptrdiff_t>(offset + 2u + option_length));
+        }
+        offset += 2u + option_length;
+    }
+
+    std::vector<uint8_t> response;
+    AppendLe16(response, channel->local_cid);
+    AppendLe16(response, 0);
+    AppendLe16(response, unknown_options.empty() ? 0 : 3);
+    response.insert(response.end(), unknown_options.begin(), unknown_options.end());
+    if (!SendL2capSignal(handle, hci, handle_id, 0x05, identifier, response))
+        return false;
+    if (unknown_options.empty())
+    {
+        channel->peer_config_received = true;
+        std::printf("L2CAP PSM 0x%04X peer configuration accepted.\n", channel->psm);
+    }
+    else
+        std::printf("L2CAP PSM 0x%04X requested unknown mandatory options; rejected for retry.\n",
+                    channel->psm);
+    return true;
+}
+
+bool ConfigureL2capChannels(libusb_device_handle* handle, const HciInterface& hci,
+                            uint16_t handle_id, uint16_t control_local,
+                            uint16_t control_remote, uint16_t interrupt_local,
+                            uint16_t interrupt_remote)
+{
+    L2capChannel control{0x0011, control_local, control_remote, 3};
+    L2capChannel interrupt{0x0013, interrupt_local, interrupt_remote, 4};
+    if (!SendConfigurationRequest(handle, hci, handle_id, control) ||
+        !SendConfigurationRequest(handle, hci, handle_id, interrupt))
+    {
+        std::puts("Could not send L2CAP Configuration Request.");
+        return false;
+    }
+    std::puts("L2CAP configuration requests sent for HID Control and HID Interrupt.");
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        if (control.config_response_received && control.peer_config_received &&
+            interrupt.config_response_received && interrupt.peer_config_received)
+        {
+            std::puts("Both HID L2CAP channels are fully configured.");
+            return true;
+        }
+
+        std::vector<uint8_t> packet;
+        if (!ReadAcl(handle, hci.acl_in_endpoint, handle_id, packet, 1000))
+            continue;
+        if (packet.size() < 8 || ReadLe16(packet, 2) != 0x0001)
+            continue;
+        const uint8_t code = packet[4];
+        const uint8_t identifier = packet[5];
+        const uint16_t command_length = ReadLe16(packet, 6);
+        if (packet.size() < 8u + command_length)
+            continue;
+
+        if (code == 0x04)
+        {
+            if (!HandleConfigurationRequest(handle, hci, handle_id, packet, control, interrupt))
+                std::printf("Ignoring malformed or unrelated L2CAP Configuration Request (id %u).\n",
+                            identifier);
+        }
+        else if (code == 0x05 && command_length >= 6)
+        {
+            const uint16_t source_cid = ReadLe16(packet, 8);
+            const uint16_t flags = ReadLe16(packet, 10);
+            const uint16_t result = ReadLe16(packet, 12);
+            L2capChannel* channel = identifier == control.config_identifier ? &control :
+                                    identifier == interrupt.config_identifier ? &interrupt : nullptr;
+            if (!channel)
+                continue;
+            if (source_cid != channel->remote_cid || flags != 0)
+            {
+                std::printf("L2CAP PSM 0x%04X received mismatched Configuration Response.\n",
+                            channel->psm);
+                return false;
+            }
+            if (result != 0)
+            {
+                std::printf("L2CAP PSM 0x%04X Configuration Response failed (result 0x%04X).\n",
+                            channel->psm, result);
+                return false;
+            }
+            channel->config_response_received = true;
+            std::printf("L2CAP PSM 0x%04X local configuration accepted.\n", channel->psm);
+        }
+        else if (code == 0x01)
+            std::printf("L2CAP Command Reject received (identifier %u).\n", identifier);
+    }
+
+    std::printf("L2CAP configuration timeout: control(local=%d, peer=%d), interrupt(local=%d, peer=%d).\n",
+        control.config_response_received, control.peer_config_received,
+        interrupt.config_response_received, interrupt.peer_config_received);
+    return false;
+}
+
 void PrintAddress(const uint8_t* address)
 {
     std::printf("%02X:%02X:%02X:%02X:%02X:%02X",
@@ -555,7 +739,10 @@ bool RunConnection(libusb_device* device, const std::array<uint8_t, 6>& remote,
             goto connection_cleanup;
         if (!ConnectL2capPsm(handle, hci, connection_handle, 0x0013, 0x0041, interrupt_cid))
             goto connection_cleanup;
-        std::puts("Both HID L2CAP channels connected. Next: configuration and HIDP reports.");
+        if (!ConfigureL2capChannels(handle, hci, connection_handle,
+                                    0x0040, control_cid, 0x0041, interrupt_cid))
+            goto connection_cleanup;
+        std::puts("HID L2CAP Control and Interrupt channels are ready for HIDP.");
         success = true;
     }
 
