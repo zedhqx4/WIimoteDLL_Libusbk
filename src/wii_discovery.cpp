@@ -491,7 +491,7 @@ bool ConfigureL2capChannels(libusb_device_handle* handle, const HciInterface& hc
             {
                 std::printf("L2CAP PSM 0x%04X Configuration Response invalid: id=%u, "
                             "source CID=0x%04X (expected local 0x%04X), "
-                            "remote CID=0x%04X, flags=0x%04X, result=0x%04X.\\n",
+                            "remote CID=0x%04X, flags=0x%04X, result=0x%04X.\n",
                             channel->psm, identifier, source_cid, channel->local_cid,
                             channel->remote_cid, flags, result);
                 continue;
