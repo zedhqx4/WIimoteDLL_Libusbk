@@ -28,5 +28,5 @@ jobs:
           cmake -S . -B build -A ${{ matrix.arch }} -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
       - name: Build
         run: cmake --build build --config Release
-      - name: Test API contract
+      - name: Test API and Wii Remote report handling
         run: ctest --test-dir build -C Release --output-on-failure
