@@ -464,7 +464,10 @@ bool HandleConfigurationRequest(libusb_device_handle* handle, const HciInterface
     }
 
     std::vector<uint8_t> response;
-    AppendLe16(response, channel->local_cid);
+    // Configuration Response SCID identifies the endpoint on the device
+    // that sent the matching Configuration Request (the Wii Remote).
+    // This is our peer-assigned CID, not the host's local CID.
+    AppendLe16(response, channel->remote_cid);
     AppendLe16(response, 0);
     AppendLe16(response, unknown_options.empty() ? 0 : 3);
     response.insert(response.end(), unknown_options.begin(), unknown_options.end());
