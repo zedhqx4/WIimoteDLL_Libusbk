@@ -26,6 +26,16 @@ if(WIN32)
   target_compile_definitions(wii_bt_passthrough PRIVATE
     WIN32_LEAN_AND_MEAN NOMINMAX WII_BT_DLL_BUILD HOTD2_WII_USB_DLL_BUILD)
   target_link_libraries(wii_bt_passthrough PRIVATE ${WII_BT_LIBUSB_TARGET} winmm)
+
+  # When this is embedded by HOTD2RE's FetchContent build, libusb is a
+  # shared target. Keep its runtime beside the optional DLL for Windows loader
+  # dependency resolution. Standalone vcpkg builds stage libusb separately.
+  if(TARGET usb-1.0)
+    add_custom_command(TARGET wii_bt_passthrough POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:usb-1.0>" "$<TARGET_FILE_DIR:wii_bt_passthrough>"
+      VERBATIM)
+  endif()
   set_target_properties(wii_bt_passthrough PROPERTIES
     OUTPUT_NAME "wii_bt_passthrough"
     WINDOWS_EXPORT_ALL_SYMBOLS OFF)
