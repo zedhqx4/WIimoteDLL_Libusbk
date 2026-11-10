@@ -625,15 +625,16 @@ void PrintWiiButtons(uint16_t buttons)
 }
 
 bool RunHidpInputTest(libusb_device_handle* handle, const HciInterface& hci,
-                      uint16_t connection_handle, uint16_t interrupt_cid)
+                      uint16_t connection_handle, uint16_t interrupt_local_cid,
+                      uint16_t interrupt_remote_cid)
 {
     // HIDP DATA output reports are carried on the HID Interrupt L2CAP channel.
     // Set player LED 1, then explicitly select the core-button input report.
     const std::vector<uint8_t> led_report{0xA2, 0x11, 0x10};
     const std::vector<uint8_t> mode_report{0xA2, 0x12, 0x00, 0x30};
-    if (!SendHidpOutput(handle, hci, connection_handle, interrupt_cid,
+    if (!SendHidpOutput(handle, hci, connection_handle, interrupt_remote_cid,
                         led_report, "Player LED 1") ||
-        !SendHidpOutput(handle, hci, connection_handle, interrupt_cid,
+        !SendHidpOutput(handle, hci, connection_handle, interrupt_remote_cid,
                         mode_report, "Core buttons report mode 0x30"))
         return false;
 
@@ -648,13 +649,20 @@ bool RunHidpInputTest(libusb_device_handle* handle, const HciInterface& hci,
         if (!ReadAcl(handle, hci.acl_in_endpoint, connection_handle, packet, 1000, true))
             continue;
 
-        if (packet.size() < 4 || ReadLe16(packet, 2) != interrupt_cid)
+        if (packet.size() < 4)
             continue;
+        const uint16_t packet_cid = ReadLe16(packet, 2);
+        if (packet_cid != interrupt_local_cid)
+        {
+            std::printf("ACL data arrived on L2CAP CID 0x%04X (not HID Interrupt local CID 0x%04X).\n",
+                        packet_cid, interrupt_local_cid);
+            continue;
+        }
 
         if (packet.size() < 6 || packet[4] != 0xA1)
         {
             std::printf("HIDP packet on Interrupt CID 0x%04X is not an input DATA report.\n",
-                        interrupt_cid);
+                        interrupt_local_cid);
             continue;
         }
 
@@ -923,7 +931,7 @@ bool RunConnection(libusb_device* device, const std::array<uint8_t, 6>& remote,
                                     pending_signaling))
             goto connection_cleanup;
         std::puts("HID L2CAP Control and Interrupt channels are ready for HIDP.");
-        success = RunHidpInputTest(handle, hci, connection_handle, interrupt_cid);
+        success = RunHidpInputTest(handle, hci, connection_handle, 0x0041, interrupt_cid);
     }
 
 connection_cleanup:
