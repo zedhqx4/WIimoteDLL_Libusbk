@@ -1,5 +1,8 @@
 #pragma once
 #include <stdint.h>
+#if defined(_WIN32)
+#include <wchar.h>
+#endif
 
 #if defined(_WIN32)
   #define WII_BT_CALL __cdecl
@@ -17,7 +20,7 @@
 extern "C" {
 #endif
 
-#define WII_BT_API_VERSION 2u
+#define WII_BT_API_VERSION 3u
 
 typedef struct WiiBtPlayerState {
     uint32_t struct_size;
@@ -43,6 +46,9 @@ typedef struct WiiBtSnapshot {
 WII_BT_API uint32_t WII_BT_CALL WiiBt_GetApiVersion(void);
 WII_BT_API int WII_BT_CALL WiiBt_HasCompatibleAdapter(int32_t vid, int32_t pid);
 WII_BT_API void* WII_BT_CALL WiiBt_Create(int32_t vid, int32_t pid);
+/* The optional UTF-16 directory receives wii_link_keys.txt. NULL uses the generic default. */
+WII_BT_API void* WII_BT_CALL WiiBt_CreateWithStorage(int32_t vid, int32_t pid,
+                                                     const wchar_t* storage_directory);
 WII_BT_API void WII_BT_CALL WiiBt_Destroy(void* instance);
 WII_BT_API int WII_BT_CALL WiiBt_Enable(void* instance, int enabled, int continuous);
 WII_BT_API int WII_BT_CALL WiiBt_Scan(void* instance);
