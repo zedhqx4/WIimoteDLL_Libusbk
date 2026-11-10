@@ -41,14 +41,14 @@ The optional adapter VID/PID can be supplied after the pairing mode:
 wii_discovery.exe --connect 40:D2:8A:07:EB:36 sync 0x0A12 0x0001
 ```
 
-The legacy PIN is handled internally as six raw Bluetooth address bytes; there is no user-entered PIN. SYNC uses the host adapter address (bonding), while 1+2 uses the Wii Remote address (temporary pairing). The diagnostic currently does not persist link keys and does not yet open L2CAP/HID channels.
+The legacy PIN is handled internally as six raw Bluetooth address bytes; there is no user-entered PIN. SYNC uses the host adapter address (bonding), while 1+2 uses the Wii Remote address (temporary pairing). The diagnostic currently does not persist link keys. The latest development step adds USB ACL bulk transport and attempts the two Wii Remote HID L2CAP PSMs (0x0011 control and 0x0013 interrupt). These channels still need L2CAP configuration and HIDP setup before input reports can flow.
 
 **Important:** CI compilation is not hardware verification. The new connection/authentication path must be tested against the CSR8510 and a real Wii Remote before it is considered working.
 
 ## Development order
 
 1. **Discovery and baseband authentication:** HCI inquiry, connection, authentication, and link-key handling for both 1+2 and SYNC.
-2. **L2CAP:** establish the HID control and interrupt channels.
+2. **L2CAP:** establish and configure the HID control and interrupt channels; validate ACL packet handling against the real remote.
 3. **HIDP:** configure the remote and receive input reports.
 4. **Reusable host/API:** separate the Bluetooth host from game-specific input adapters.
 5. **Pairing utility:** provide a standalone tool to inspect the adapter and manage remote connections.
