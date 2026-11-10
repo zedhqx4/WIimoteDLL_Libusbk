@@ -221,6 +221,95 @@ bool SendCommand(libusb_device_handle* handle, HciEventPump& event_pump,
     return event_pump.WaitForCommandResponse(opcode, response);
 }
 
+
+bool SendAcl(libusb_device_handle* handle, uint8_t endpoint, uint16_t handle_id,
+             uint16_t cid, const uint8_t* payload, uint16_t payload_size)
+{
+    std::vector<uint8_t> packet(8 + payload_size);
+    const uint16_t hf = static_cast<uint16_t>((handle_id & 0x0FFF) | 0x2000);
+    const uint16_t length = static_cast<uint16_t>(4 + payload_size);
+    packet[0] = static_cast<uint8_t>(hf);
+    packet[1] = static_cast<uint8_t>(hf >> 8);
+    packet[2] = static_cast<uint8_t>(length);
+    packet[3] = static_cast<uint8_t>(length >> 8);
+    packet[4] = static_cast<uint8_t>(payload_size);
+    packet[5] = static_cast<uint8_t>(payload_size >> 8);
+    packet[6] = static_cast<uint8_t>(cid);
+    packet[7] = static_cast<uint8_t>(cid >> 8);
+    std::copy(payload, payload + payload_size, packet.begin() + 8);
+    int transferred = 0;
+    const int rc = libusb_bulk_transfer(handle, endpoint, packet.data(),
+        static_cast<int>(packet.size()), &transferred, 5000);
+    return rc == LIBUSB_SUCCESS && transferred == static_cast<int>(packet.size());
+}
+
+bool ReadAcl(libusb_device_handle* handle, uint8_t endpoint, uint16_t expected_handle,
+             std::vector<uint8_t>& l2cap, unsigned timeout_ms)
+{
+    std::array<uint8_t, 4096> packet{};
+    int transferred = 0;
+    const int rc = libusb_bulk_transfer(handle, endpoint, packet.data(),
+        static_cast<int>(packet.size()), &transferred, timeout_ms);
+    if (rc != LIBUSB_SUCCESS || transferred < 8)
+        return false;
+    const uint16_t hf = static_cast<uint16_t>(packet[0]) |
+                        (static_cast<uint16_t>(packet[1]) << 8);
+    const uint16_t acl_length = static_cast<uint16_t>(packet[2]) |
+                                (static_cast<uint16_t>(packet[3]) << 8);
+    const uint16_t l2cap_length = static_cast<uint16_t>(packet[4]) |
+                                  (static_cast<uint16_t>(packet[5]) << 8);
+    if ((hf & 0x0FFF) != expected_handle ||
+        acl_length + 4u > static_cast<unsigned>(transferred) ||
+        l2cap_length + 4u > acl_length ||
+        l2cap_length + 8u > static_cast<unsigned>(transferred))
+        return false;
+    l2cap.assign(packet.begin() + 4, packet.begin() + 8 + l2cap_length);
+    return true;
+}
+
+bool ConnectL2capPsm(libusb_device_handle* handle, const HciInterface& hci,
+                     uint16_t handle_id, uint16_t psm, uint16_t local_cid,
+                     uint16_t& remote_cid)
+{
+    const uint8_t ident = psm == 0x0011 ? 1 : 2;
+    const std::array<uint8_t, 8> req{
+        0x02, ident, 0x04, 0x00, static_cast<uint8_t>(psm),
+        static_cast<uint8_t>(psm >> 8), static_cast<uint8_t>(local_cid),
+        static_cast<uint8_t>(local_cid >> 8)
+    };
+    if (!SendAcl(handle, hci.acl_out_endpoint, handle_id, 0x0001,
+                 req.data(), static_cast<uint16_t>(req.size())))
+        return false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(12);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        std::vector<uint8_t> packet;
+        if (!ReadAcl(handle, hci.acl_in_endpoint, handle_id, packet, 3000))
+            continue;
+        if (packet.size() < 16 || packet[2] != 0x01 ||
+            packet[4] != 0x03 || packet[5] != ident)
+            continue;
+        remote_cid = static_cast<uint16_t>(packet[8]) |
+                     (static_cast<uint16_t>(packet[9]) << 8);
+        const uint16_t echoed_cid = static_cast<uint16_t>(packet[10]) |
+                                    (static_cast<uint16_t>(packet[11]) << 8);
+        const uint16_t result = static_cast<uint16_t>(packet[12]) |
+                                (static_cast<uint16_t>(packet[13]) << 8);
+        if (echoed_cid != local_cid)
+            continue;
+        if (result != 0)
+        {
+            std::printf("L2CAP PSM 0x%04X rejected, result 0x%04X\n", psm, result);
+            return false;
+        }
+        std::printf("L2CAP PSM 0x%04X connected (local 0x%04X, remote 0x%04X).\n",
+                    psm, local_cid, remote_cid);
+        return true;
+    }
+    std::printf("L2CAP PSM 0x%04X response timeout.\n", psm);
+    return false;
+}
+
 void PrintAddress(const uint8_t* address)
 {
     std::printf("%02X:%02X:%02X:%02X:%02X:%02X",
@@ -443,7 +532,14 @@ bool RunConnection(libusb_device* device, const std::array<uint8_t, 6>& remote,
             }
         }
 
-        std::puts("Baseband authentication is complete. L2CAP HID is the next stage.");
+        std::puts("Baseband authentication is complete. Opening HID L2CAP channels...");
+        uint16_t control_cid = 0;
+        uint16_t interrupt_cid = 0;
+        if (!ConnectL2capPsm(handle, hci, connection_handle, 0x0011, 0x0040, control_cid))
+            goto connection_cleanup;
+        if (!ConnectL2capPsm(handle, hci, connection_handle, 0x0013, 0x0041, interrupt_cid))
+            goto connection_cleanup;
+        std::puts("Both HID L2CAP channels connected. Next: configuration and HIDP reports.");
         success = true;
     }
 
