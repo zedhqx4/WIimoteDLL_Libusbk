@@ -59,6 +59,13 @@ jobs:
           }
 
           Copy-Item README.md, LICENSE $stage
+
+          $libusbLicense = "build/_deps/libusb_cmake-src/libusb/COPYING"
+          if (-not (Test-Path $libusbLicense)) {
+            throw "libusb license file was not found: $libusbLicense"
+          }
+          Copy-Item $libusbLicense "$stage/libusb-COPYING"
+
           New-Item -ItemType Directory -Force -Path "$stage/include" | Out-Null
           Copy-Item include/*.h "$stage/include"
 
