@@ -397,8 +397,7 @@ bool SendL2capSignal(libusb_device_handle* handle, const HciInterface& hci,
 }
 
 bool SendConfigurationRequest(libusb_device_handle* handle, const HciInterface& hci,
-                              uint16_t handle_id, L2capChannel& channel){
-    std::vector<uint8_t> body;
+                              uint16_t handle_id, L2capChannel& channel){    std::vector<uint8_t> body;
     AppendLe16(body, channel.remote_cid);
     AppendLe16(body, 0);
     return SendL2capSignal(handle, hci, handle_id, 0x04,
@@ -656,16 +655,21 @@ bool RunHidpInputTest(libusb_device_handle* handle, const HciInterface& hci,
     // Set player LED 1, then explicitly select the core-button input report.
     const std::vector<uint8_t> led_report{0xA2, 0x11, 0x10};
     const std::vector<uint8_t> mode_report{0xA2, 0x12, 0x00, 0x30};
+    const std::vector<uint8_t> status_report{0xA2, 0x15, 0x00};
     // Probe legacy SET_REPORT on Control, then send the normal DATA reports
     // on Interrupt. This tests both supported Wii Remote transport variants.
     if (!SendHidpControlSetReport(handle, hci, connection_handle, control_remote_cid,
                                   led_report, "Player LED 1") ||
         !SendHidpControlSetReport(handle, hci, connection_handle, control_remote_cid,
                                   mode_report, "Core buttons report mode 0x30") ||
+        !SendHidpControlSetReport(handle, hci, connection_handle, control_remote_cid,
+                                  status_report, "Status request") ||
         !SendHidpOutput(handle, hci, connection_handle, interrupt_remote_cid,
                         led_report, "Player LED 1") ||
         !SendHidpOutput(handle, hci, connection_handle, interrupt_remote_cid,
-                        mode_report, "Core buttons report mode 0x30"))
+                        mode_report, "Core buttons report mode 0x30") ||
+        !SendHidpOutput(handle, hci, connection_handle, interrupt_remote_cid,
+                        status_report, "Status request"))
         return false;
 
     std::puts("HIDP input test active for 45 seconds. Press and release buttons on the Wii Remote.");
@@ -797,7 +801,6 @@ void PrintAddress(const uint8_t* address)
                 address[5], address[4], address[3],
                 address[2], address[1], address[0]);
 }
-
 
 bool ParseAddress(const char* text, std::array<uint8_t, 6>& address)
 {
