@@ -53,6 +53,10 @@ The legacy PIN is handled internally as six raw Bluetooth address bytes; there i
 4. **Reusable host/API:** separate the Bluetooth host from game-specific input adapters.
 5. **Pairing utility:** provide a standalone tool to inspect the adapter and manage remote connections.
 
-## Licensing
+## License and project independence
 
-The repository is intended to host a separately distributed component. Any Dolphin-derived source must retain its applicable GPL-2.0-or-later notices and corresponding source-distribution obligations. Game projects communicate with the host through a documented interface; licensing implications of the concrete integration model must be reviewed before distribution.
+Original code in this repository is released under **0BSD** (see [LICENSE](LICENSE)). This permissive, OSI-approved license allows game projects and other applications to use, modify, redistribute, and incorporate the library with minimal restrictions, including in closed-source products.
+
+The project takes inspiration from Dolphin's Bluetooth-adapter passthrough feature, but the reusable host implementation is maintained independently. We do not copy or relicense Dolphin source code under 0BSD. Any future code copied or adapted from Dolphin must remain clearly separated, retain its original GPL-2.0-or-later notices, and be reviewed before inclusion; it cannot be relicensed as 0BSD.
+
+Third-party dependencies keep their own licenses. In particular, **libusb remains LGPL-2.1-or-later**; the 0BSD grant applies to this repository's original code, not to libusb or other bundled dependencies.
