@@ -5,10 +5,10 @@ Independent USB Bluetooth host for Nintendo Wii Remotes, intended to be consumed
 ## Goals
 
 - Own a dedicated USB Bluetooth HCI adapter through libusb/libusbK.
-- Discover and pair Wii Remotes using both 1+2 and SYNC-button procedures.
+- Discover and connect to Wii Remotes using both 1+2 and SYNC-button procedures.
 - Implement Bluetooth Classic HCI, L2CAP, HIDP, and Wii Remote report handling.
 - Keep the Windows Bluetooth stack and unrelated radios untouched.
-- Expose a stable API to game integrations and provide a standalone diagnostic/pairing utility.
+- Expose a stable API to game integrations and provide standalone diagnostic utilities.
 
 ## Current hardware baseline
 
@@ -23,19 +23,35 @@ Verified hardware operations from the HOTD2RE probes:
 
 ## Current implementation
 
-The `feature/hci-discovery-pairing` branch contains an initial `wii_discovery` executable. It claims the USB HCI interface, resets the controller, starts a General Inquiry (GIAC), and prints discovered Bluetooth addresses and Class of Device values.
+The `feature/hci-discovery-pairing` branch contains the `wii_discovery` diagnostic executable:
 
-This is the first active discovery step, **not pairing yet**. The next increment will identify Wii Remotes, create the baseband connection, and implement the two Wii Remote PIN procedures (1+2 and SYNC).
+- Default mode: resets the adapter and performs General Inquiry (GIAC), printing discovered addresses and Class of Device values.
+- Connection mode: targets a supplied Bluetooth address, reads the host adapter address, issues HCI Create Connection, requests authentication, rejects an unknown stored link key, and automatically answers a legacy PIN request for either SYNC or 1+2 mode.
 
-The new discovery executable has been committed but has not yet been compiled or tested on the user's CSR8510. Do not treat it as hardware-verified.
+Connection-mode syntax:
+
+```text
+wii_discovery.exe --connect 40:D2:8A:07:EB:36 sync
+wii_discovery.exe --connect 40:D2:8A:07:EB:36 1+2
+```
+
+The optional adapter VID/PID can be supplied after the pairing mode:
+
+```text
+wii_discovery.exe --connect 40:D2:8A:07:EB:36 sync 0x0A12 0x0001
+```
+
+The legacy PIN is handled internally as six raw Bluetooth address bytes; there is no user-entered PIN. SYNC uses the host adapter address (bonding), while 1+2 uses the Wii Remote address (temporary pairing). The diagnostic currently does not persist link keys and does not yet open L2CAP/HID channels.
+
+**Important:** CI compilation is not hardware verification. The new connection/authentication path must be tested against the CSR8510 and a real Wii Remote before it is considered working.
 
 ## Development order
 
-1. **Discovery and pairing:** HCI inquiry, Wii Remote identification, connection, authentication, and link-key handling for both 1+2 and SYNC.
+1. **Discovery and baseband authentication:** HCI inquiry, connection, authentication, and link-key handling for both 1+2 and SYNC.
 2. **L2CAP:** establish the HID control and interrupt channels.
 3. **HIDP:** configure the remote and receive input reports.
 4. **Reusable host/API:** separate the Bluetooth host from game-specific input adapters.
-5. **Pairing/diagnostic utility:** provide a standalone tool to inspect the adapter and manage remote connections.
+5. **Pairing utility:** provide a standalone tool to inspect the adapter and manage remote connections.
 
 ## Licensing
 
