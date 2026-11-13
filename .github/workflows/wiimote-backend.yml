@@ -1,0 +1,38 @@
+name: Wiimote Backend
+
+on:
+  push:
+    branches:
+      - feature/standalone-wiimote-backend
+    paths:
+      - "wiimote-backend/**"
+      - ".github/workflows/wiimote-backend.yml"
+  pull_request:
+    paths:
+      - "wiimote-backend/**"
+      - ".github/workflows/wiimote-backend.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: Core tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Configure standalone library
+        run: cmake -S wiimote-backend -B build-wiimote -DWIIMOTE_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build-wiimote --config Release
+
+      - name: Run tests
+        run: ctest --test-dir build-wiimote -C Release --output-on-failure
